@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>내 SSD - {{ current }}</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<main>
+  <h1><a href="/">내 SSD</a></h1>
+  {% if error %}
+  <p class="error">{{ error }}</p>
+  <p><a class="btn" href="/files">처음으로</a></p>
+  {% else %}
+  <p class="where">현재 위치: {{ current }}</p>
+  {% if parent is not none %}
+  <p><a class="btn" href="/files?path={{ parent|urlencode }}">← 상위 폴더</a></p>
+  {% endif %}
+  <ul class="list">
+    {% for e in entries %}
+    {% if e.is_dir %}
+    <li><a href="/files?path={{ e.path|urlencode }}">📁 {{ e.name }}</a></li>
+    {% else %}
+    <li><a href="/download?path={{ e.path|urlencode }}">📄 {{ e.name }}</a></li>
+    {% endif %}
+    {% else %}
+    <li class="empty">비어 있는 폴더입니다.</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</main>
+</body>
+</html>
