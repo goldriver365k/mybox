@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}MySSD - 더보기{% endblock %}
+{% block main %}
+  <h2>더보기</h2>
+  <div class="menu">
+    <a href="/favorites">⭐ 즐겨찾기</a>
+    <a href="/media?kind=image">🖼 사진</a>
+    <a href="/media?kind=video">🎬 동영상</a>
+    <a href="/trash">🗑 휴지통</a>
+  </div>
+  <h3>관리</h3>
+  <div class="menu">
+    <a href="/analysis">📊 저장공간</a>
+    <a href="/activity">📝 최근 작업</a>
+    <a href="/status">🩺 시스템 상태</a>
+    <a href="/manage">⚙ SSD 관리 (캐시·임시 파일 정리)</a>
+  </div>
+  <form method="post" action="/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn gray wide">로그아웃</button></form>
+{% endblock %}

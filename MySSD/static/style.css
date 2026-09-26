@@ -144,3 +144,33 @@ input.sel { width: 24px; height: 24px; margin: 18px 0 0; flex: none; }
 .st.bad { background: #fee2e2; color: #b91c1c; }
 .st.unk { background: #fef3c7; color: #92400e; }
 .more { text-align: center; }
+/* 8단계: 홈·하단 메뉴·업로드·위험 버튼·상태 */
+.ssdline .nums { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 6px 0 2px; font-size: 0.95rem; }
+.bigsearch { margin: 0 0 12px; }
+.bigsearch input { width: 100%; min-height: 52px; font-size: 1.1rem; padding: 12px 14px; border-radius: 10px; }
+.quick.admin a { min-height: 44px; background: #f8fafc; font-size: 0.9rem; }
+nav.bottom .up { color: #fff; background: #2563eb; }
+.menu { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+.menu a { display: flex; align-items: center; min-height: 52px; padding: 8px 14px; background: #fff; border: 1px solid #ddd; border-radius: 8px; color: #222; text-decoration: none; }
+.btn.wide { width: 100%; }
+.btn.disabled, label.disabled { opacity: 0.5; pointer-events: none; }
+.ulist { list-style: none; margin: 8px 0; padding: 0; }
+.ulist li { padding: 8px 0; border-bottom: 1px solid #eee; }
+.ulist .u-name { font-weight: bold; overflow-wrap: anywhere; }
+.ulist progress { width: 100%; height: 14px; }
+.ulist .u-done .u-state { color: #15803d; font-weight: bold; }
+.ulist .u-fail .u-state { color: #b91c1c; font-weight: bold; }
+.ulist .u-cancel .u-state { color: #666; }
+.u-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+/* 위험한 작업은 빨간색으로 구분 */
+.acts button.danger, .row .acts button.danger { color: #fff; background: #dc2626; }
+.danger-zone { margin-top: 16px; padding-top: 12px; border-top: 1px dashed #f3b4b4; }
+.small.danger-outline { color: #b91c1c; border-color: #f3b4b4; }
+.danger-text { color: #b91c1c !important; }
+.errcode { font-size: 2.5rem; font-weight: bold; color: #999; margin: 8px 0 0; }
+.dot { font-weight: bold; }
+.dot.ok { color: #15803d; }
+.dot.bad { color: #b91c1c; }
+.dot.unk { color: #b45309; }
+.addr { width: 100%; max-width: 360px; margin-bottom: 6px; }
+.info .star { display: inline-block; vertical-align: middle; }

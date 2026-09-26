@@ -1,27 +1,44 @@
 {% extends "base.html" %}
-{% block title %}내 SSD - 시스템 상태{% endblock %}
-{% macro mark(v, ok="정상", bad="문제", unknown="확인 필요") %}{% if v is none %}<span class="st unk">{{ unknown }}</span>{% elif v %}<span class="st ok">{{ ok }}</span>{% else %}<span class="st bad">{{ bad }}</span>{% endif %}{% endmacro %}
+{% block title %}MySSD - 시스템 상태{% endblock %}
+{% macro dot(state, text) %}<span class="dot {{ state }}">● {{ text }}</span>{% endmacro %}
+{% macro tri(v, ok, bad, unknown="확인 필요") %}{% if v is none %}{{ dot("unk", unknown) }}{% elif v %}{{ dot("ok", ok) }}{% else %}{{ dot("bad", bad) }}{% endif %}{% endmacro %}
 {% block main %}
   <h2>🩺 시스템 상태</h2>
-  <table class="info">
-    <tr><th>SSD 연결</th><td>{% if info.ssd %}<span class="st ok">정상</span> {{ info.root }}{% else %}<span class="st bad">연결 안 됨</span> {{ info.ssd_error }}{% endif %}</td></tr>
+  <table class="info status">
+    <tr><th>MySSD 서버</th><td>{{ dot("ok", "실행 중") }} <span class="meta">시작 {{ started|date }}{% if windowless %} · 창 없이 실행(자동 실행 방식){% endif %}</span></td></tr>
+    <tr><th>외장 SSD</th><td>{% if info.ssd %}{{ dot("ok", "연결됨") }}{% if info.ssd.label %} <span class="meta">{{ info.ssd.label }}</span>{% endif %}
+      {% else %}{{ dot("bad", "연결 안 됨") }} <span class="meta">{{ info.ssd_error }}</span>{% endif %}</td></tr>
     {% if info.ssd %}
-    <tr><th>SSD 읽기</th><td>{{ mark(info.ssd.readable) }}</td></tr>
-    <tr><th>SSD 쓰기</th><td>{{ mark(info.ssd.writable) }} <span class="meta">(.myssd_temp 에 시험 파일을 만들었다 바로 삭제)</span></td></tr>
-    {% if info.ssd.label %}<tr><th>볼륨 이름</th><td>{{ info.ssd.label }}</td></tr>{% endif %}
-    {% if info.disk %}<tr><th>전체 / 남은 용량</th><td>{{ info.disk.total }} / {{ info.disk.free }}</td></tr>{% endif %}
+    <tr><th>읽기</th><td>{{ tri(info.ssd.readable, "정상", "불가") }}</td></tr>
+    <tr><th>쓰기</th><td>{{ tri(info.ssd.writable, "정상", "불가") }}</td></tr>
+    {% if info.disk %}<tr><th>저장공간</th><td>{{ info.disk.used }} / {{ info.disk.total }} <span class="meta">(남음 {{ info.disk.free }})</span></td></tr>{% endif %}
     {% endif %}
     <tr><th>Tailscale</th><td>
-      {% if ts.installed is sameas false %}<span class="st bad">설치 안 됨</span>
-      {% elif ts.installed is none %}<span class="st unk">확인 필요</span> <span class="meta">tailscale 명령을 찾지 못함</span>
-      {% else %}설치됨 · 실행 {{ mark(ts.running, "연결됨", "연결 안 됨") }}{% if ts.ip %} · IP {{ ts.ip }}{% endif %}{% if ts.dns %}<br>MagicDNS: {{ ts.dns }}{% endif %}{% endif %}</td></tr>
-    <tr><th>Serve (HTTPS)</th><td>{{ mark(ts.serve, "설정됨 (127.0.0.1:" ~ port ~ ")", "설정 없음") }}{% if ts.funnel %} <span class="st bad">⚠ Funnel 켜짐</span>{% endif %}</td></tr>
-    <tr><th>HTTPS 접속</th><td>{% if last_https %}<span class="st ok">정상</span> <span class="meta">최근 HTTPS 요청 {{ last_https|date }}</span>
-      {% else %}<span class="st unk">확인 필요</span> <span class="meta">이 서버 실행 후 HTTPS 접속 기록 없음 — [진단 실행] 또는 README 6-2</span>{% endif %}</td></tr>
-    <tr><th>MySSD 서버</th><td><span class="st ok">실행 중</span> <span class="meta">시작 {{ started|date }} · PID {{ pid }} · {{ host }}:{{ port }}{% if windowless %} · 창 없이 실행(자동 실행 방식){% endif %}</span></td></tr>
-    <tr><th>자동 실행</th><td>{{ mark(autostart, "등록됨 (시작프로그램 바로가기)", "등록 안 됨") }}</td></tr>
+      {% if ts.installed is sameas false %}{{ dot("bad", "설치 안 됨") }}
+      {% elif ts.installed is none %}{{ dot("unk", "확인 필요") }} <span class="meta">tailscale 명령을 찾지 못함</span>
+      {% else %}{{ tri(ts.running, "연결됨", "연결 안 됨") }}{% endif %}</td></tr>
+    <tr><th>HTTPS</th><td>{% if last_https %}{{ dot("ok", "정상") }} <span class="meta">최근 HTTPS 접속 {{ last_https|date }}</span>
+      {% else %}{{ dot("unk", "확인 필요") }} <span class="meta">서버 시작 후 HTTPS 접속 기록 없음 — 아래 [진단 실행]</span>{% endif %}</td></tr>
+    <tr><th>자동실행</th><td>{{ tri(autostart, "설정됨", "설정 안 됨") }}</td></tr>
     <tr><th>마지막 오류</th><td>{% if errors %}{{ errors[0].time|date }} · {{ errors[0].kind }}{% else %}없음{% endif %}</td></tr>
   </table>
+
+  <h3>외부 접속</h3>
+  <div class="card">
+    {% if ts.ip or ts.dns or https_url %}
+    <table class="info">
+      {% if ts.ip %}<tr><th>Tailscale IP</th><td>{{ ts.ip }}</td></tr>{% endif %}
+      {% if ts.dns %}<tr><th>MagicDNS 이름</th><td>{{ ts.dns }}</td></tr>{% endif %}
+      {% if https_url %}<tr><th>HTTPS 주소</th><td><input id="addr" class="addr" value="{{ https_url }}" readonly>
+        <button id="copy" class="btn" type="button">접속주소 복사</button> <span id="copied" class="meta"></span></td></tr>{% endif %}
+    </table>
+    {% if not https_url %}<p class="meta">HTTPS 주소는 Tailscale Serve 설정이 확인되면 표시됩니다 (README 7장).</p>{% endif %}
+    {% else %}
+    <p class="meta">Tailscale에서 확인한 접속 정보가 없습니다. Tailscale이 설치·로그인되어 있는지 확인하세요 (README 6장).
+      확인되지 않은 주소는 표시하지 않습니다.</p>
+    {% endif %}
+    {% if ts.funnel %}<p class="error">⚠ Tailscale Funnel(인터넷 공개)이 켜져 있습니다. MySSD는 Funnel 요청을 거부하지만 끄는 것이 안전합니다.</p>{% endif %}
+  </div>
 
   <form method="post" action="/status/diagnose" class="box">
     <input type="hidden" name="csrf" value="{{ csrf }}">
@@ -53,4 +70,18 @@
     <li class="empty">기록된 오류가 없습니다.</li>
     {% endfor %}
   </ul>
+  <p><a class="small" href="/manage">⚙ SSD 관리 (캐시·임시 파일 정리)</a></p>
+{% endblock %}
+{% block script %}
+<script>
+(function () {
+  var b = document.getElementById("copy");
+  if (!b) return;
+  b.onclick = function () {
+    var a = document.getElementById("addr"), done = function () { document.getElementById("copied").textContent = "복사했습니다"; };
+    if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(a.value).then(done, function () { a.select(); document.execCommand("copy"); done(); });
+    else { a.select(); document.execCommand("copy"); done(); }
+  };
+})();
+</script>
 {% endblock %}

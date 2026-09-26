@@ -17,7 +17,7 @@ import unicodedata
 from contextlib import contextmanager
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import uvicorn
 from fastapi import APIRouter, Depends, FastAPI, Form, Request
@@ -73,6 +73,8 @@ EMPTY_TOKENS = {}  # 휴지통 비우기 2단계 확인: token -> (만료 시각
 MASS_LOG = []  # 최근 파일 변경 작업: (시각, 파일 수) — 짧은 시간 대량 작업 감지용
 HEALTH_CACHE = {}  # SSD 읽기/쓰기 확인 결과 (60초)
 STATE = {"ssd_ok": None, "last_https": None, "started": time.time(), "diagnosis": None}  # 시스템 상태 화면용
+UPLOAD_DONE = {}  # 업로드 id -> (완료 시각, 저장된 이름): 응답만 못 받은 업로드를 다시 보내 중복 저장하지 않도록
+UPLOAD_ID = re.compile(r"^[A-Za-z0-9-]{8,64}$")
 TEMP_PART = re.compile(r"^[0-9a-f]{16}\.part$")  # 업로드 임시 파일 이름 (이 모양만 정리 대상)
 THUMB_COUNT = [0]
 
@@ -635,7 +637,7 @@ def user_error(request: Request, exc: UserError):
         audit(request, "denied", url=request.url.path, query=request.url.query, reason=exc.message)
     if request.url.path == "/upload":
         return JSONResponse({"error": exc.message}, status_code=exc.status)
-    return render_files(request, exc.status, error=exc.message, ssd_down=isinstance(exc, SSDMissing))
+    return render_files(request, exc.status, error=exc.message, ssd_down=isinstance(exc, SSDMissing), code=exc.status)
 
 
 @app.exception_handler(MassConfirm)
@@ -650,8 +652,8 @@ def http_error(request: Request, exc: Exception):
     if not is_logged_in(request):
         return RedirectResponse("/", status_code=303)
     status = getattr(exc, "status_code", 400)
-    msg = "페이지를 찾을 수 없습니다." if status == 404 else "잘못된 요청입니다."
-    return render_files(request, status, error=msg)
+    msg = {404: "파일을 찾을 수 없습니다.", 403: "접근할 수 없습니다."}.get(status, "잘못된 요청입니다.")
+    return render_files(request, status, error=msg, code=status)
 
 
 @app.exception_handler(Exception)
@@ -661,8 +663,8 @@ def server_error(request: Request, exc: Exception):
     if not is_logged_in(request):
         return RedirectResponse("/", status_code=303)
     if request.url.path == "/upload":
-        return JSONResponse({"error": "알 수 없는 오류가 발생했습니다. 다시 시도해 주세요."}, status_code=500)
-    return render_files(request, 500, error="알 수 없는 오류가 발생했습니다. 다시 시도해 주세요.")
+        return JSONResponse({"error": "처리 중 문제가 발생했습니다. 다시 시도해 주세요."}, status_code=500)
+    return render_files(request, 500, error="처리 중 문제가 발생했습니다. 잠시 후 다시 시도해 주세요.", code=500)
 
 
 @app.get("/")
@@ -750,7 +752,6 @@ def files(request: Request, path: str = "", sort: str = "", view: str = "", limi
         view=request.session.get("view", "list"), favorites=set(load_favorites(root)),
         disk=disk_info(root) if not rel else None,
         health=ssd_health(root) if not rel else None,
-        trash=trash_usage(root) if not rel else None,
     )
 
 
@@ -1018,10 +1019,25 @@ async def upload(request: Request, path: str = "", name: str = ""):
                 pass
     audit(request, "upload", path="/" + to_rel(root, target), size=size)
     record("업로드", target.name, "", "/" + to_rel(root, target.parent))
+    upload_id = request.headers.get("x-upload-id", "")
+    if UPLOAD_ID.match(upload_id):
+        with LOCK:
+            now = time.time()
+            for k in [k for k, v in UPLOAD_DONE.items() if now - v[0] > 3600]:
+                del UPLOAD_DONE[k]
+            UPLOAD_DONE[upload_id] = (now, target.name)
     flash = request.session.get("flash") or ""
     flash = (flash + ", " if flash.startswith("올린 파일:") else "올린 파일: ") + target.name
     request.session["flash"] = flash if len(flash) < 400 else flash[:400] + "…"
     return JSONResponse({"name": target.name})
+
+
+@private.get("/upload/check")
+def upload_check(id: str = ""):
+    """다시 시도 전에 확인: 이 업로드가 이미 서버에 저장되었는가 (연결이 끊겨 응답만 못 받은 경우)"""
+    with LOCK:
+        done = UPLOAD_DONE.get(id)
+    return JSONResponse({"done": bool(done), "name": done[1] if done else None})
 
 
 @private.post("/folder")
@@ -1233,6 +1249,7 @@ def trash_item(root, src):
         "name": src.name,
         "original_path": to_rel(root, src.parent),
         "deleted_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "deleted_ts": time.time(),  # 같은 초에 여러 개를 지워도 삭제 순서가 정확하도록
         "trash_name": f"{tid}/{src.name}",
         "is_dir": src.is_dir(),
         "size": size,
@@ -1291,7 +1308,8 @@ def trash_page(request: Request, sort: str = "new"):
     for m in items:
         trash_size(root, m)
     sort = sort if sort in TRASH_SORTS else "new"
-    keys = {"new": (lambda m: m.get("deleted_at", ""), True), "old": (lambda m: m.get("deleted_at", ""), False),
+    when = lambda m: (m.get("deleted_at", ""), m.get("deleted_ts", 0))
+    keys = {"new": (when, True), "old": (when, False),
             "size": (lambda m: m["size"], True), "name": (lambda m: m["name"].lower(), False)}
     key, rev = keys[sort]
     items.sort(key=key, reverse=rev)
@@ -1335,7 +1353,7 @@ def purge_item(root, meta):
         (root / TRASH_DIR / f"{meta['id']}.json").unlink(missing_ok=True)
 
 
-TRASH_META_KEYS = ("name", "original_path", "deleted_at", "trash_name", "is_dir", "size", "files")
+TRASH_META_KEYS = ("name", "original_path", "deleted_at", "deleted_ts", "trash_name", "is_dir", "size", "files")
 
 
 def trash_size(root, meta, recount=False):
@@ -1439,6 +1457,11 @@ def purge(request: Request, id: str = Form(""), csrf: str = Form(""), confirm: s
     audit(request, "purge", trash_id=id, name=meta["name"], original="/" + meta.get("original_path", ""))
     request.session["flash"] = f"영구 삭제했습니다: {meta['name']}"
     return RedirectResponse("/trash", status_code=303)
+
+
+@private.get("/more")
+def more(request: Request):
+    return page(request, "more.html")
 
 
 @private.get("/activity")
@@ -1655,7 +1678,9 @@ def status_page(request: Request):
         info["ssd_error"] = e.message
     ts = syscheck.tailscale(config.PORT)
     errors = read_jsonl(ERROR_FILE, 20)
-    return page(request, "status.html", info=info, ts=ts, autostart=syscheck.autostart(), last_https=STATE["last_https"],
+    # 접속 주소는 Tailscale 에서 실제로 확인한 이름 + Serve 설정이 있을 때만 만든다 (추측 금지)
+    https_url = f"https://{ts['dns']}" if ts.get("dns") and ts.get("serve") else None
+    return page(request, "status.html", info=info, ts=ts, https_url=https_url, autostart=syscheck.autostart(), last_https=STATE["last_https"],
                 started=STATE["started"], pid=os.getpid(), host=config.HOST, port=config.PORT,
                 windowless=sys.stdout is None or getattr(sys.stdout, "name", "").endswith("console.log"),
                 errors=errors, diagnosis=STATE["diagnosis"], analysis_result=analysis.load(root) if info["ssd"] else None)
@@ -1679,12 +1704,37 @@ def diagnose(request: Request, csrf: str = Form("")):
 app.include_router(private)
 
 
+CSP = ("default-src 'self'; img-src 'self' data:; media-src 'self'; style-src 'self' 'unsafe-inline'; "
+       "script-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
+
+
+def security_headers(request, response):
+    """기본 보안 헤더 (화면·업로드·미리보기에 필요한 inline 스크립트/스타일은 허용)"""
+    h = response.headers
+    h.setdefault("X-Content-Type-Options", "nosniff")
+    h.setdefault("Referrer-Policy", "same-origin")
+    h.setdefault("X-Frame-Options", "DENY")
+    h.setdefault("Content-Security-Policy", CSP)
+    if request.url.scheme == "https":
+        h.setdefault("Strict-Transport-Security", "max-age=2592000")
+    return response
+
+
 async def guard(request: Request, call_next):
+    return security_headers(request, await check_request(request, call_next))
+
+
+async def check_request(request, call_next):
     # Tailscale Funnel(인터넷 공개)로 들어온 요청은 항상 거부. MySSD는 Serve(내 기기 전용)만 사용
     if not ip_allowed(request.client.host if request.client else "") or "tailscale-funnel-request" in request.headers:
         log.warning("blocked_network ip=%s url=%s", request.client.host if request.client else "-", request.url.path)
         return PlainTextResponse("허용되지 않은 네트워크입니다. Tailscale에 연결한 뒤 접속하세요.", status_code=403)
     path = request.url.path
+    # 다른 사이트에서 보낸 POST 차단 (CSRF 토큰 + SameSite 쿠키에 더한 추가 방어). 브라우저가 보낸 Origin 만 확인
+    origin = request.headers.get("origin")
+    if request.method == "POST" and origin and urlsplit(origin).netloc != request.headers.get("host", ""):
+        log.warning("blocked_origin origin=%s url=%s", origin[:100], path)
+        return PlainTextResponse("잘못된 요청 출처입니다. MySSD 화면에서 다시 시도하세요.", status_code=403)
     # 요청 본문을 읽기 전에 차단: 로그인 안 한 사용자의 업로드가 임시 파일로 쌓이지 않게 함
     if not (path in PUBLIC_PATHS or path.startswith("/static/") or is_logged_in(request)):
         if path == "/upload" and request.method == "POST":
@@ -1747,9 +1797,20 @@ def tailscale_ip():
 if __name__ == "__main__":
     windowless = sys.stdout is None  # pythonw.exe(자동 실행)는 콘솔이 없음 → 출력은 logs/console.log
     if windowless:
-        sys.stdout = sys.stderr = open(LOG_DIR / "console.log", "a", encoding="utf-8", buffering=1)
+        console = LOG_DIR / "console.log"
+        try:
+            if console.stat().st_size > 5_000_000:  # 무한히 커지지 않도록 5MB 넘으면 한 세대만 보관
+                os.replace(console, LOG_DIR / "console.log.1")
+        except OSError:
+            pass
+        sys.stdout = sys.stderr = open(console, "a", encoding="utf-8", buffering=1)
     log.info("server_start host=%s port=%s ssd_root=%s", config.HOST, config.PORT, config.SSD_ROOT)
-    print("내 SSD 서버 시작 (종료: Ctrl+C)")
+    print("MySSD 서버 시작 (종료: Ctrl+C)")
+    # 재부팅 직후 SSD·Tailscale 이 늦게 준비되어도 서버는 그대로 시작하고, 준비되면 자동으로 인식한다
+    try:
+        print(f"  외장 SSD:       연결됨 ({get_root()})")
+    except UserError:
+        print("  외장 SSD:       아직 연결 안 됨 — 연결되면 새로고침만 하면 됩니다")
     print(f"  이 PC에서:      http://127.0.0.1:{config.PORT}")
     if config.HOST != "127.0.0.1":
         ts = tailscale_ip()

@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
-{% block title %}내 SSD - 휴지통{% endblock %}
+{% block title %}MySSD - 휴지통{% endblock %}
 {% block main %}
   <h2>휴지통</h2>
   <div class="card">
@@ -15,7 +15,7 @@
       <noscript><button>정렬</button></noscript>
     </form>
     <form method="post" action="/trash/recount"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="small" title="기록된 용량이 실제와 다를 때">용량 다시 계산</button></form>
-    {% if items %}<a class="small" href="/trash/empty">휴지통 비우기…</a>{% endif %}
+    {% if items %}<a class="small danger-outline" href="/trash/empty">⚠ 휴지통 비우기…</a>{% endif %}
   </div>
   <ul class="list">
     {% for t in items %}
@@ -30,7 +30,7 @@
             <input type="hidden" name="id" value="{{ t.id }}">
             <button class="restore">복원</button>
           </form>
-          <a class="quiet" href="/trash/purge?id={{ t.id }}">영구 삭제</a>
+          <a class="quiet danger-text" href="/trash/purge?id={{ t.id }}">영구 삭제…</a>
         </div>
       </div>
     </li>

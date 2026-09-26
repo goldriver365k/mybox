@@ -50,15 +50,22 @@
     {% if item.is_dir %}{% if item.children is defined %}<tr><th>안의 항목</th><td>{{ item.children }}개</td></tr>{% endif %}
     {% else %}<tr><th>크기</th><td>{{ item.size|size }} ({{ "{:,}".format(item.size) }} 바이트)</td></tr>{% endif %}
     {% if item.dims %}<tr><th>가로 × 세로</th><td>{{ item.dims }}</td></tr>{% endif %}
-    <tr><th>수정 날짜</th><td>{{ item.mtime|date }}</td></tr>
+    <tr><th>수정일</th><td>{{ item.mtime|date }}</td></tr>
     <tr><th>저장 위치</th><td><a href="/files?path={{ item.parent|urlencode }}">/{{ item.parent }}{% if item.parent %}/{% endif %}</a></td></tr>
+    <tr><th>즐겨찾기</th><td>{{ m.star(item, [item.path] if favorite else [], csrf, "/info?path=" ~ item.path|urlencode) }} {{ "즐겨찾기됨" if favorite else "아님" }}</td></tr>
   </table>
   <div class="acts big">
-    <a href="{{ m.open_url(item) }}">{{ "열기" if item.is_dir else "보기" if item.kind in ("image", "video") else "다운로드" }}</a>
+    {% if item.is_dir %}<a href="/files?path={{ item.path|urlencode }}">열기</a>
+    {% else %}{% if item.kind in ("image", "video") %}<a href="/view?path={{ item.path|urlencode }}">보기</a>{% endif %}
+    <a href="/download?path={{ item.path|urlencode }}">다운로드</a>{% endif %}
     <a href="/rename?path={{ item.path|urlencode }}">이름 변경</a>
     <a href="/move?path={{ item.path|urlencode }}">이동</a>
   </div>
-  {{ m.star(item, [item.path] if favorite else [], csrf, "/info?path=" ~ item.path|urlencode) }}
+  <form class="danger-zone" method="post" action="/delete" onsubmit="return confirm('휴지통으로 옮길까요?\n(휴지통에서 복원할 수 있습니다)')">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="path" value="{{ item.path }}">
+    <button class="btn danger">🗑 휴지통으로</button>
+  </form>
 
   {% elif mode == "mass" %}
   <h2>대량 파일 작업입니다</h2>

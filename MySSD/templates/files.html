@@ -1,63 +1,57 @@
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
 {% set here = request.url.path ~ ("?" ~ request.url.query if request.url.query else "") %}
-{% block title %}내 SSD - {{ current }}{% endblock %}
+{% block title %}MySSD - {{ current }}{% endblock %}
 {% block main %}
   {% if error %}
-  {% if ssd_down %}<p class="ssd off">● SSD 연결 안 됨</p>{% endif %}
+  {% if ssd_down %}<p class="ssd off">● SSD 연결 안 됨</p>{% elif code in (403, 404, 500) %}<p class="errcode">{{ code }}</p>{% endif %}
   <p class="error">{{ error }}</p>
   <p><a class="btn" href="/files">{{ "다시 확인" if ssd_down else "처음으로" }}</a></p>
   {% else %}
   {% if path == "" %}
+  {% if disk %}
+  <div class="card ssdline">
+    <div><span class="ssd on">● SSD 연결됨</span>{% if health and health.label %} <span class="meta">{{ health.label }}</span>{% endif %}</div>
+    <div class="nums"><span>전체 <b>{{ disk.total }}</b></span><span>사용 <b>{{ disk.used }}</b></span><span>남음 <b>{{ disk.free }}</b></span></div>
+    <div class="bar thin{% if disk.level == 'critical' %} low{% elif disk.level == 'low' %} mid{% endif %}"><span style="width: {{ disk.pct }}%"></span></div>
+    {% if disk.warning %}<p class="{{ 'error' if disk.level == 'critical' else 'warn' }}">⚠ {{ disk.warning }}</p>{% endif %}
+    {% if health and not health.writable %}<p class="warn">⚠ SSD에 쓸 수 없습니다 (읽기 전용이거나 권한 문제). 업로드·이동이 실패할 수 있습니다.</p>{% endif %}
+  </div>
+  {% endif %}
+  <form class="bigsearch" action="/search" role="search">
+    <input type="search" name="q" placeholder="🔍 파일 및 폴더 검색" maxlength="100" enterkeyhint="search" aria-label="파일 및 폴더 검색">
+  </form>
   <div class="quick">
+    <a href="#myfiles">📁 내 파일</a>
     <a href="/recent">🕘 최근 파일</a>
     <a href="/favorites">⭐ 즐겨찾기</a>
     <a href="/media?kind=image">🖼 사진</a>
     <a href="/media?kind=video">🎬 동영상</a>
     <a href="/trash">🗑 휴지통</a>
+  </div>
+  <div class="quick admin">
+    <a href="/analysis">📊 저장공간</a>
     <a href="/activity">📝 최근 작업</a>
-    <a href="/manage">⚙ SSD 관리</a>
-    <a href="/analysis">📊 저장공간 분석</a>
     <a href="/status">🩺 시스템 상태</a>
   </div>
-  {% if disk %}
-  <div class="card disk">
-    <b>외장 SSD{% if health and health.label %} ({{ health.label }}){% endif %}</b>
-    <span class="ssd on">● SSD 연결됨</span>
-    {% if health and not health.writable %}<p class="warn">⚠ SSD에 쓸 수 없습니다 (읽기 전용이거나 권한 문제). 업로드·이동이 실패할 수 있습니다.</p>{% endif %}
-    <div class="stats">
-      <div><span>전체 용량</span><b>{{ disk.total }}</b></div>
-      <div><span>사용 중</span><b>{{ disk.used }}</b></div>
-      <div><span>남은 공간</span><b>{{ disk.free }}</b></div>
-      <div><span>사용률</span><b>{{ disk.pct }}%</b></div>
-    </div>
-    <div class="bar{% if disk.level == 'critical' %} low{% elif disk.level == 'low' %} mid{% endif %}"><span style="width: {{ disk.pct }}%"></span></div>
-    {% if disk.warning %}<p class="{{ 'error' if disk.level == 'critical' else 'warn' }}">⚠ {{ disk.warning }}</p>{% endif %}
-  </div>
-  {% endif %}
-  {% if trash %}
-  <div class="card">
-    <b>🗑 휴지통</b> {{ trash[0]|size }} · 파일 {{ "{:,}".format(trash[1]) }}개
-    <div class="acts"><a href="/trash">휴지통 보기</a></div>
-  </div>
-  {% endif %}
-  <h2>내 파일</h2>
+  <h2 id="myfiles">내 파일</h2>
   {% else %}
   <p class="where">현재 위치: {{ current }}</p>
   {% endif %}
   <div class="tools">
     <form id="upload" data-max="{{ max_upload }}" data-max-text="{{ max_upload_text }}" data-room="{{ room or 0 }}" data-path="{{ path }}" data-csrf="{{ csrf }}">
-      <label class="btn">⬆ 파일 올리기<input id="upload-input" class="hide" type="file" multiple></label>
+      <label id="upload-label" class="btn">⬆ 파일 올리기<input id="upload-input" class="hide" type="file" multiple></label>
     </form>
     <a class="btn" href="#newfolder">📁 새 폴더</a>
   </div>
-  <div id="progress" class="progress" hidden>
-    <div id="p-name" class="p-name"></div>
-    <div id="p-state">업로드 중...</div>
-    <progress id="p-bar" max="100" value="0"></progress>
-    <div><b id="p-pct">0%</b> <span id="p-size"></span></div>
-    <button id="p-cancel" class="btn gray" type="button">취소</button>
-    <a id="p-reload" class="btn" href="" hidden>목록 새로고침</a>
+  <div id="uploads" class="progress" hidden>
+    <div id="u-summary" class="p-name"></div>
+    <ul id="u-list" class="ulist"></ul>
+    <div class="u-actions">
+      <button id="u-cancel" class="btn gray" type="button">취소</button>
+      <button id="u-retry" class="btn" type="button" hidden>실패한 파일 다시 시도</button>
+      <button id="u-close" class="btn gray" type="button" hidden>닫기</button>
+    </div>
   </div>
   <form id="newfolder" class="newfolder" method="post" action="/folder">
     <input type="hidden" name="csrf" value="{{ csrf }}">
@@ -77,8 +71,9 @@
     </form>
     {% if view == "grid" %}<a class="small" href="/files?path={{ path|urlencode }}&view=list">☰ 목록</a>
     {% else %}<a class="small" href="/files?path={{ path|urlencode }}&view=grid">▦ 사진 보기</a>{% endif %}
-    {% if entries %}<button id="select-all" class="small" type="button">☑ 전체 선택</button>{% endif %}
+    <button id="select-all" class="small" type="button">☑ 전체 선택</button>
   </div>
+  <div id="listing">
   <ul class="{{ 'grid' if view == 'grid' else 'list' }}">
     {% for e in entries %}
     {% if view == "grid" %}
@@ -102,7 +97,7 @@
           <form method="post" action="/delete" onsubmit="return confirm('휴지통으로 옮길까요?\n(휴지통에서 복원할 수 있습니다)')">
             <input type="hidden" name="csrf" value="{{ csrf }}">
             <input type="hidden" name="path" value="{{ e.path }}">
-            <button>삭제</button>
+            <button class="danger">휴지통</button>
           </form>
         </div>
       </div>
@@ -117,6 +112,7 @@
   <p class="more">{{ "{:,}".format(total) }}개 중 {{ "{:,}".format(entries|length) }}개 표시 ([전체 선택]은 표시된 항목만 선택)
     <a class="btn" href="/files?path={{ path|urlencode }}&limit={{ limit + page_size }}">더 보기 (+{{ page_size }})</a></p>
   {% endif %}
+  </div>
   <form id="bulk" method="post" action="/bulk">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <input type="hidden" name="path" value="{{ path }}">
@@ -129,93 +125,141 @@
   </form>
   {% endif %}
 {% endblock %}
-{% block navupload %}{% if not error %}<label for="upload-input">⬆<span>올리기</span></label>{% endif %}{% endblock %}
+{% block navupload %}{% if not error %}<label class="up" for="upload-input">⬆<span>올리기</span></label>{% else %}<a class="up" href="/files">⬆<span>올리기</span></a>{% endif %}{% endblock %}
 {% block script %}
 <script>
+/* 업로드: 파일마다 이름·크기·진행률·상태 표시. 끝나면 목록만 새로 받아 바꿈(전체 새로고침 없음). */
 (function () {
   var form = document.getElementById("upload");
   if (!form) return;
-  var input = document.getElementById("upload-input");
   var $ = function (id) { return document.getElementById(id); };
-  var mb = function (n) { return n >= 1073741824 ? (n / 1073741824).toFixed(2) + "GB" : (n / 1048576).toFixed(1) + "MB"; };
-  var xhr = null, busy = false;
+  var input = $("upload-input");
+  var mb = function (n) { return n >= 1073741824 ? (n / 1073741824).toFixed(2) + "GB" : n >= 1048576 ? (n / 1048576).toFixed(1) + "MB" : Math.ceil(n / 1024) + "KB"; };
+  var items = [], xhr = null, busy = false;
   window.addEventListener("beforeunload", function (e) { if (busy) { e.preventDefault(); e.returnValue = ""; } });
-  $("p-cancel").onclick = function () { if (xhr && confirm("업로드를 취소할까요?")) xhr.abort(); };
 
-  function stop(message) {
-    busy = false;
-    $("p-state").textContent = message;
-    $("p-cancel").hidden = true;
-    $("p-reload").hidden = false;
-    input.value = "";
+  function setBusy(b) {  // 업로드 중에는 파일 선택을 막아 같은 파일이 여러 번 올라가지 않게
+    busy = b;
+    input.disabled = b;
+    $("upload-label").classList.toggle("disabled", b);
+    $("u-cancel").hidden = !b;
   }
-
+  function show(it, state, text) {
+    it.state = state;
+    it.li.className = "u-" + state;
+    it.st.textContent = text;
+  }
+  function summary() {
+    var done = items.filter(function (i) { return i.state === "done"; }).length;
+    var failed = items.filter(function (i) { return i.state === "fail"; }).length;
+    var s = done + "/" + items.length + "개 완료";
+    if (failed) s += " · " + failed + "개 실패";
+    var cancelled = items.filter(function (i) { return i.state === "cancel"; }).length;
+    $("u-summary").textContent = busy ? "업로드 중 — " + s : failed ? "⚠ 업로드 실패 — " + s
+      : cancelled ? "업로드를 취소했습니다 — " + s : "✓ 업로드 완료 — " + s;
+  }
+  function refreshList() {  // 현재 폴더 목록만 다시 받아 교체 → 올린 파일이 바로 보임
+    fetch(location.href, { credentials: "same-origin" }).then(function (r) { return r.text(); }).then(function (html) {
+      var doc = new DOMParser().parseFromString(html, "text/html");
+      var fresh = doc.getElementById("listing");
+      if (fresh) { $("listing").replaceWith(fresh); document.dispatchEvent(new Event("listing-updated")); }
+    }).catch(function () {});
+  }
+  function next() {
+    var it = items.find(function (i) { return i.state === "wait"; });
+    if (!it) { setBusy(false); summary(); $("u-close").hidden = false;
+      $("u-retry").hidden = !items.some(function (i) { return i.state === "fail"; }); refreshList(); return; }
+    show(it, "up", "업로드 중");
+    summary();
+    xhr = new XMLHttpRequest();
+    xhr.open("POST", "/upload?path=" + encodeURIComponent(form.dataset.path) + "&name=" + encodeURIComponent(it.file.name));
+    xhr.setRequestHeader("X-CSRF-Token", form.dataset.csrf);
+    xhr.setRequestHeader("X-Upload-Id", it.id);
+    xhr.upload.onprogress = function (e) {
+      if (!e.lengthComputable) return;
+      var pct = Math.floor(e.loaded * 100 / e.total);
+      it.bar.value = pct;
+      it.sz.textContent = mb(e.loaded) + " / " + mb(e.total) + " · " + pct + "%";
+      if (e.loaded >= e.total) it.st.textContent = "저장 확인 중";
+    };
+    xhr.onload = function () {
+      if (xhr.status === 200) { it.bar.value = 100; it.sz.textContent = mb(it.file.size) + " · 100%"; show(it, "done", "✓ 업로드 완료"); }
+      else {
+        var msg = "";
+        try { msg = JSON.parse(xhr.responseText).error || ""; } catch (err) {}
+        show(it, "fail", "업로드 실패 — 다시 시도하십시오." + (msg ? " (" + msg + ")" : ""));
+      }
+      next();
+    };
+    xhr.onerror = function () { show(it, "fail", "업로드 실패 — 연결이 끊겼습니다. 다시 시도하십시오."); next(); };
+    xhr.onabort = function () { show(it, "cancel", "취소됨 (저장되지 않음)"); next(); };
+    xhr.send(it.file);
+  }
+  function add(file) {
+    var li = document.createElement("li");
+    li.innerHTML = '<div class="u-name"></div><div class="meta"><span class="u-size"></span> · <span class="u-state">대기</span></div><progress max="100" value="0"></progress>';
+    li.querySelector(".u-name").textContent = file.name;
+    var it = { id: Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 12), file: file, li: li, st: li.querySelector(".u-state"), sz: li.querySelector(".u-size"), bar: li.querySelector("progress"), state: "wait" };
+    it.sz.textContent = "0 / " + mb(file.size);
+    $("u-list").appendChild(li);
+    items.push(it);
+  }
   input.onchange = function () {
-    var files = Array.prototype.slice.call(input.files);
+    if (busy) return;
+    var files = Array.prototype.slice.call(input.files), total = 0;
+    input.value = "";
     if (!files.length) return;
-    var total = 0;
     for (var k = 0; k < files.length; k++) {
       total += files[k].size;
-      if (files[k].size > +form.dataset.max) {
-        alert(files[k].name + "\n업로드 최대 크기(" + form.dataset.maxText + ")를 넘었습니다.");
-        input.value = "";
-        return;
-      }
+      if (files[k].size > +form.dataset.max) { alert(files[k].name + "\n업로드 최대 크기(" + form.dataset.maxText + ")를 넘었습니다."); return; }
     }
     if (total > +form.dataset.room) {  // 업로드 전 남은 공간 확인 (최소 여유 공간 제외)
       alert("SSD 저장공간이 부족하여 업로드할 수 없습니다.\n올릴 파일 " + mb(total) + " / 업로드 가능 공간 " + mb(+form.dataset.room));
-      input.value = "";
       return;
     }
-    busy = true;
-    $("progress").hidden = false;
-    $("p-cancel").hidden = false;
-    $("p-reload").hidden = true;
-    var i = 0;
-    (function next() {
-      if (i >= files.length) { busy = false; location.reload(); return; }
-      var file = files[i];
-      $("p-name").textContent = file.name + (files.length > 1 ? " (" + (i + 1) + "/" + files.length + ")" : "");
-      $("p-state").textContent = "업로드 중...";
-      xhr = new XMLHttpRequest();
-      xhr.open("POST", "/upload?path=" + encodeURIComponent(form.dataset.path) + "&name=" + encodeURIComponent(file.name));
-      xhr.setRequestHeader("X-CSRF-Token", form.dataset.csrf);
-      xhr.upload.onprogress = function (e) {
-        if (!e.lengthComputable) return;
-        var pct = Math.floor(e.loaded * 100 / e.total);
-        $("p-bar").value = pct;
-        $("p-pct").textContent = pct + "%";
-        $("p-size").textContent = mb(e.loaded) + " / " + mb(e.total);
-        if (e.loaded >= e.total) $("p-state").textContent = "저장 확인 중...";
-      };
-      xhr.onload = function () {
-        if (xhr.status === 200) { i++; next(); return; }
-        var msg = "업로드에 실패했습니다.";
-        try { msg = JSON.parse(xhr.responseText).error || msg; } catch (err) {}
-        stop(file.name + ": " + msg);
-      };
-      xhr.onerror = function () { stop(file.name + ": 연결이 끊겼습니다. 올리던 파일은 저장되지 않았습니다. 다시 시도하세요."); };
-      xhr.onabort = function () { stop(file.name + ": 업로드를 취소했습니다. 올리던 파일은 저장되지 않았습니다."); };
-      xhr.send(file);
-    })();
+    items = []; $("u-list").innerHTML = "";
+    files.forEach(add);
+    $("uploads").hidden = false; $("u-retry").hidden = true; $("u-close").hidden = true;
+    setBusy(true); next();
   };
+  $("u-cancel").onclick = function () {
+    if (!confirm("업로드를 취소할까요? (올리던 파일은 저장되지 않습니다)")) return;
+    items.forEach(function (i) { if (i.state === "wait") show(i, "cancel", "취소됨"); });
+    if (xhr) xhr.abort();
+  };
+  $("u-retry").onclick = function () {
+    var failed = items.filter(function (i) { return i.state === "fail"; });
+    $("u-retry").hidden = true; $("u-close").hidden = true;
+    setBusy(true);
+    // 먼저 서버에 이미 저장됐는지 확인 (연결이 끊겨 결과만 못 받은 경우 같은 파일을 두 번 올리지 않음)
+    Promise.all(failed.map(function (i) {
+      return fetch("/upload/check?id=" + encodeURIComponent(i.id), { credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (d.done) { i.bar.value = 100; show(i, "done", "✓ 업로드 완료 (이미 저장됨: " + d.name + ")"); }
+          else { i.bar.value = 0; show(i, "wait", "대기"); }
+        })
+        .catch(function () { i.bar.value = 0; show(i, "wait", "대기"); });
+    })).then(next);
+  };
+  $("u-close").onclick = function () { $("uploads").hidden = true; };
 })();
-</script>
-<script>
+
+/* 여러 항목 선택 (목록을 새로 받아도 동작하도록 매번 다시 찾음) */
 (function () {
-  var boxes = Array.prototype.slice.call(document.querySelectorAll("input.sel"));
   var bar = document.getElementById("bulkbar");
   if (!bar) return;
-  var count = function () { return boxes.filter(function (b) { return b.checked; }).length; };
+  var boxes = function () { return Array.prototype.slice.call(document.querySelectorAll("input.sel")); };
+  var count = function () { return boxes().filter(function (b) { return b.checked; }).length; };
   var refresh = function () { var n = count(); bar.hidden = n === 0; document.getElementById("sel-count").textContent = n + "개 선택"; };
-  boxes.forEach(function (b) { b.onchange = refresh; });
-  var all = document.getElementById("select-all");
-  if (all) all.onclick = function () {
-    var every = boxes.length && boxes.every(function (b) { return b.checked; });
-    boxes.forEach(function (b) { b.checked = !every; });
+  document.addEventListener("change", function (e) { if (e.target.classList && e.target.classList.contains("sel")) refresh(); });
+  document.addEventListener("listing-updated", refresh);
+  document.getElementById("select-all").onclick = function () {
+    var all = boxes(), every = all.length && all.every(function (b) { return b.checked; });
+    all.forEach(function (b) { b.checked = !every; });
     refresh();
   };
-  document.getElementById("sel-clear").onclick = function () { boxes.forEach(function (b) { b.checked = false; }); refresh(); };
+  document.getElementById("sel-clear").onclick = function () { boxes().forEach(function (b) { b.checked = false; }); refresh(); };
   document.getElementById("bulk-trash").onclick = function () {
     return confirm("선택한 " + count() + "개 항목을 휴지통으로 이동하시겠습니까?\n(휴지통에서 복원할 수 있습니다)");
   };

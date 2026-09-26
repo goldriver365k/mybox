@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
 {% set here = request.url.path ~ ("?" ~ request.url.query if request.url.query else "") %}
-{% block title %}내 SSD - {{ title }}{% endblock %}
+{% block title %}MySSD - {{ title }}{% endblock %}
 {% block main %}
   <h2>{{ title }}</h2>
   {% if q is defined and not q %}<p class="note">위 검색창에 파일이나 폴더 이름의 일부를 입력하세요.</p>{% endif %}
