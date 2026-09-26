@@ -4,8 +4,9 @@
 {% block title %}내 SSD - {{ current }}{% endblock %}
 {% block main %}
   {% if error %}
+  {% if ssd_down %}<p class="ssd off">● SSD 연결 안 됨</p>{% endif %}
   <p class="error">{{ error }}</p>
-  <p><a class="btn" href="/files">처음으로</a></p>
+  <p><a class="btn" href="/files">{{ "다시 확인" if ssd_down else "처음으로" }}</a></p>
   {% else %}
   {% if path == "" %}
   <div class="quick">
@@ -14,14 +15,28 @@
     <a href="/media?kind=image">🖼 사진</a>
     <a href="/media?kind=video">🎬 동영상</a>
     <a href="/trash">🗑 휴지통</a>
+    <a href="/activity">📝 최근 작업</a>
+    <a href="/manage">⚙ SSD 관리</a>
   </div>
   {% if disk %}
   <div class="card disk">
-    <b>저장공간</b>
-    <div>{{ disk.used }} / {{ disk.total }} 사용</div>
-    <div class="bar{% if disk.low %} low{% endif %}"><span style="width: {{ disk.pct }}%"></span></div>
-    <div class="meta">사용률 {{ disk.pct }}% · 남은 공간 {{ disk.free }}</div>
-    {% if disk.low %}<p class="warn">⚠ SSD 남은 공간이 {{ disk.warn_pct }}% 이하입니다.</p>{% endif %}
+    <b>외장 SSD{% if health and health.label %} ({{ health.label }}){% endif %}</b>
+    <span class="ssd on">● SSD 연결됨</span>
+    {% if health and not health.writable %}<p class="warn">⚠ SSD에 쓸 수 없습니다 (읽기 전용이거나 권한 문제). 업로드·이동이 실패할 수 있습니다.</p>{% endif %}
+    <div class="stats">
+      <div><span>전체 용량</span><b>{{ disk.total }}</b></div>
+      <div><span>사용 중</span><b>{{ disk.used }}</b></div>
+      <div><span>남은 공간</span><b>{{ disk.free }}</b></div>
+      <div><span>사용률</span><b>{{ disk.pct }}%</b></div>
+    </div>
+    <div class="bar{% if disk.level == 'critical' %} low{% elif disk.level == 'low' %} mid{% endif %}"><span style="width: {{ disk.pct }}%"></span></div>
+    {% if disk.warning %}<p class="{{ 'error' if disk.level == 'critical' else 'warn' }}">⚠ {{ disk.warning }}</p>{% endif %}
+  </div>
+  {% endif %}
+  {% if trash %}
+  <div class="card">
+    <b>🗑 휴지통</b> {{ trash[0]|size }} · 파일 {{ "{:,}".format(trash[1]) }}개
+    <div class="acts"><a href="/trash">휴지통 보기</a></div>
   </div>
   {% endif %}
   <h2>내 파일</h2>
@@ -29,7 +44,7 @@
   <p class="where">현재 위치: {{ current }}</p>
   {% endif %}
   <div class="tools">
-    <form id="upload" data-max="{{ max_upload }}" data-max-text="{{ max_upload_text }}" data-path="{{ path }}" data-csrf="{{ csrf }}">
+    <form id="upload" data-max="{{ max_upload }}" data-max-text="{{ max_upload_text }}" data-room="{{ room or 0 }}" data-path="{{ path }}" data-csrf="{{ csrf }}">
       <label class="btn">⬆ 파일 올리기<input id="upload-input" class="hide" type="file" multiple></label>
     </form>
     <a class="btn" href="#newfolder">📁 새 폴더</a>
@@ -132,12 +147,19 @@
   input.onchange = function () {
     var files = Array.prototype.slice.call(input.files);
     if (!files.length) return;
+    var total = 0;
     for (var k = 0; k < files.length; k++) {
+      total += files[k].size;
       if (files[k].size > +form.dataset.max) {
         alert(files[k].name + "\n업로드 최대 크기(" + form.dataset.maxText + ")를 넘었습니다.");
         input.value = "";
         return;
       }
+    }
+    if (total > +form.dataset.room) {  // 업로드 전 남은 공간 확인 (최소 여유 공간 제외)
+      alert("SSD 저장공간이 부족하여 업로드할 수 없습니다.\n올릴 파일 " + mb(total) + " / 업로드 가능 공간 " + mb(+form.dataset.room));
+      input.value = "";
+      return;
     }
     busy = true;
     $("progress").hidden = false;

@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}내 SSD - SSD 관리{% endblock %}
+{% block main %}
+  <h2>SSD 관리</h2>
+  <div class="card">
+    <b>SSD 상태</b> <span class="ssd on">● SSD 연결됨</span>
+    <table class="info">
+      <tr><th>위치</th><td>{{ root }}</td></tr>
+      {% if health.label %}<tr><th>볼륨 이름</th><td>{{ health.label }}</td></tr>{% endif %}
+      <tr><th>읽기</th><td>{{ "가능" if health.readable else "⚠ 불가" }}</td></tr>
+      <tr><th>쓰기</th><td>{{ "가능" if health.writable else "⚠ 불가" }}</td></tr>
+      {% if disk %}
+      <tr><th>전체 용량</th><td>{{ disk.total }}</td></tr>
+      <tr><th>사용 중</th><td>{{ disk.used }} ({{ disk.pct }}%)</td></tr>
+      <tr><th>남은 공간</th><td>{{ disk.free }}</td></tr>
+      <tr><th>최소 여유 공간</th><td>{{ min_free }} GB (업로드 후 이보다 적게 남으면 업로드하지 않음)</td></tr>
+      {% endif %}
+      <tr><th>SMART 상태</th><td>확인하지 않음 (별도 프로그램·관리자 권한이 필요)</td></tr>
+    </table>
+    {% if disk and disk.warning %}<p class="{{ 'error' if disk.level == 'critical' else 'warn' }}">⚠ {{ disk.warning }}</p>{% endif %}
+  </div>
+  <h3>MySSD 관리 폴더 용량</h3>
+  <table class="info">
+    {% for name, u in usage.items() %}<tr><th>{{ name }}</th><td>{{ u[0]|size }} · 파일 {{ "{:,}".format(u[1]) }}개</td></tr>{% endfor %}
+  </table>
+  <div class="acts big">
+    <a href="/trash">휴지통 보기</a>
+    <form method="post" action="/manage/cache/clear" onsubmit="return confirm('썸네일 캐시를 정리할까요?\n원본 사진·동영상은 지워지지 않으며, 썸네일은 다시 볼 때 새로 만들어집니다.')">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="confirm" value="yes">
+      <button class="restore">썸네일 캐시 정리</button>
+    </form>
+    {% if stale %}
+    <form method="post" action="/manage/temp/clean" onsubmit="return confirm('끝나지 않은 업로드의 임시 파일 {{ stale }}개({{ stale_size|size }})를 정리할까요?\n진행 중인 업로드는 건드리지 않습니다.')">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="confirm" value="yes">
+      <button class="restore">임시 파일 정리 ({{ stale }}개)</button>
+    </form>
+    {% else %}<span class="meta">정리할 임시 파일 없음</span>{% endif %}
+  </div>
+  <p class="note">이 SSD 한 개만 사용 중입니다. 같은 SSD 안의 복사본은 SSD가 고장 나면 함께 사라지므로 백업이 아닙니다.
+    실수로 지운 파일은 휴지통에서 복원할 수 있습니다.</p>
+{% endblock %}

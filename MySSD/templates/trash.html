@@ -3,13 +3,26 @@
 {% block title %}내 SSD - 휴지통{% endblock %}
 {% block main %}
   <h2>휴지통</h2>
+  <div class="card">
+    휴지통이 차지하는 공간: <b>{{ total_size|size }}</b> · 파일 {{ "{:,}".format(total_files) }}개 · 항목 {{ items|length }}개
+    <div class="meta">휴지통 파일은 자동으로 지워지지 않습니다. 공간이 필요하면 큰 파일순으로 보고 직접 정리하세요.</div>
+  </div>
+  <div class="controls">
+    <form method="get" action="/trash">
+      <select name="sort" aria-label="정렬" onchange="this.form.submit()">
+        {% for k, label in sorts.items() %}<option value="{{ k }}"{% if k == sort %} selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+      <noscript><button>정렬</button></noscript>
+    </form>
+    {% if items %}<a class="small" href="/trash/empty">휴지통 비우기…</a>{% endif %}
+  </div>
   <ul class="list">
     {% for t in items %}
     <li class="row">
       <span class="thumb">{{ m.icon(t) }}</span>
       <div class="body">
         <span class="name">{{ t.name }}</span>
-        <div class="meta">원래 위치: /{{ t.original_path }}<br>삭제한 날짜: {{ t.deleted_at }}</div>
+        <div class="meta">{{ t.size|size }}{% if t.kind == "dir" %} · 파일 {{ t.files }}개{% endif %} · 원래 위치: /{{ t.original_path }}<br>삭제한 날짜: {{ t.deleted_at }}</div>
         <div class="acts">
           <form method="post" action="/trash/restore">
             <input type="hidden" name="csrf" value="{{ csrf }}">

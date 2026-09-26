@@ -32,6 +32,8 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.requests import ClientDisconnect
 
 import config
+import storage
+from storage import HIDDEN, MANAGED_PREFIX, is_managed
 
 try:
     from PIL import Image, ImageOps  # 사진 썸네일·크기 (없으면 아이콘으로 대체)
@@ -39,15 +41,14 @@ except ImportError:
     Image = None
 
 BASE_DIR = Path(__file__).parent
-HIDDEN = {"system volume information", "$recycle.bin"}
 IMAGE_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp", ".gif": "image/gif"}
 VIDEO_TYPES = {".mp4": "video/mp4", ".webm": "video/webm"}
 BAD_CHARS = set('<>:"/\\|?*')
 RESERVED = {"CON", "PRN", "AUX", "NUL"} | {f"{p}{i}" for p in ("COM", "LPT") for i in range(1, 10)}
-MANAGED_PREFIX = ".myssd"  # .myssd_temp, .myssd_trash 등 MySSD 내부 관리 폴더. 웹에서 접근 불가
 TEMP_DIR = ".myssd_temp"
 TRASH_DIR = ".myssd_trash"
 META_DIR = ".myssd_meta"  # favorites.json
+CACHE_DIR = ".myssd_cache"
 THUMB_DIR = ".myssd_cache/thumbnails"
 SORTS = {"name": "이름순", "new": "최근 수정순", "old": "오래된순", "size": "파일 크기순", "type": "파일 종류순"}
 TRASH_ID = re.compile(r"^\d{8}-\d{6}-[0-9a-f]{8}$")
@@ -66,6 +67,10 @@ FS_LOCK = threading.Lock()  # 이름 확인 + 이동을 한 번에 처리 (덮�
 ACTIVE_UPLOADS = {}  # 업로드 토큰 -> 저장될 폴더. 업로드 중인 폴더는 이동/이름 변경/삭제 금지
 FAV_LOCK = threading.Lock()
 SELECTIONS = {}  # 여러 항목 이동용 선택 목록: id -> (만료 시각, 원래 폴더, [경로...])
+EMPTY_TOKENS = {}  # 휴지통 비우기 2단계 확인: token -> (만료 시각, [휴지통 id...])
+MASS_LOG = []  # 최근 파일 변경 작업: (시각, 파일 수) — 짧은 시간 대량 작업 감지용
+HEALTH_CACHE = {}  # SSD 읽기/쓰기 확인 결과 (60초)
+TEMP_PART = re.compile(r"^[0-9a-f]{16}\.part$")  # 업로드 임시 파일 이름 (이 모양만 정리 대상)
 THUMB_COUNT = [0]
 
 LOG_DIR = BASE_DIR / "logs"
@@ -93,22 +98,34 @@ class UserError(Exception):
         self.status = status
 
 
+class SSDMissing(UserError):
+    def __init__(self, detail=""):
+        super().__init__("외장 SSD 연결이 끊어졌습니다. SSD를 다시 연결하십시오." + (f" ({detail})" if detail else ""), 503)
+
+
+class MassConfirm(Exception):
+    """대량 파일 작업: 같은 요청을 mass_confirm=yes 로 한 번 더 보내야 실행"""
+
+    def __init__(self, url, fields, files, recent):
+        self.url, self.fields, self.files, self.recent = url, fields, files, recent
+
+
 def get_root():
-    root = Path(config.SSD_ROOT)
+    """외장 SSD 루트. SSD_VOLUME_LABEL 이 있으면 볼륨 이름으로 확인 (확실하지 않으면 다른 디스크를 쓰지 않고 오류)."""
+    try:
+        root = storage.locate(config.SSD_ROOT, config.SSD_VOLUME_LABEL)
+    except LookupError as e:
+        raise SSDMissing(str(e))
     try:
         if root.is_dir():
             return root.resolve()
     except OSError:
         pass
-    raise UserError("외장 SSD를 찾을 수 없습니다. 연결 상태와 config.py의 SSD_ROOT를 확인하세요.", 503)
+    raise SSDMissing()
 
 
 def is_inside(root, path):
     return path == root or root in path.parents
-
-
-def is_managed(name):
-    return name.lower().startswith(MANAGED_PREFIX)
 
 
 def safe_path(rel):
@@ -173,37 +190,9 @@ def sort_entries(entries, sort):
 
 
 def scan_ssd(root, state):
-    """SSD_ROOT 전체를 훑으며 (이름, 상대경로, 폴더여부, stat) 를 돌려준다.
-    관리 폴더·시스템 폴더·링크/정션은 건너뛰고, 읽을 수 없는 폴더는 무시한다.
-    SCAN_TIME_LIMIT 을 넘기면 멈추고 state["partial"]=True.
+    """SSD_ROOT 전체 훑기 (검색·최근·모아보기용). 규칙은 storage.walk 참고. SCAN_TIME_LIMIT 을 넘기면 state["partial"]=True.
     (파일이 아주 많아지면 이 함수만 인덱스 조회로 바꾸면 검색/최근/모아보기가 모두 따라간다)"""
-    deadline = time.monotonic() + config.SCAN_TIME_LIMIT
-    stack = [root]
-    while stack:
-        if time.monotonic() > deadline:
-            state["partial"] = True
-            return
-        folder = stack.pop()
-        try:
-            it = os.scandir(folder)
-        except OSError:
-            continue
-        with it:
-            for e in it:
-                if e.name.lower() in HIDDEN or is_managed(e.name):
-                    continue
-                try:
-                    if e.is_symlink():
-                        continue
-                    st = e.stat(follow_symlinks=False)
-                    is_dir = stat.S_ISDIR(st.st_mode)
-                    if is_dir and getattr(st, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT:
-                        continue  # Windows 정션: SSD 밖을 가리킬 수 있으므로 따라가지 않음
-                except (OSError, AttributeError):
-                    continue
-                yield e.name, Path(e.path).relative_to(root).as_posix(), is_dir, st
-                if is_dir:
-                    stack.append(e.path)
+    return storage.walk(root, state, deadline=time.monotonic() + config.SCAN_TIME_LIMIT)
 
 
 def fold(text):
@@ -446,6 +435,67 @@ def trim_thumb_cache(d):
             break
 
 
+ACTIVITY_FILE = LOG_DIR / "activity.jsonl"
+ACTIVITY_LOCK = threading.Lock()
+
+
+def record(action, name, src="", dst="", ok=True, detail=""):
+    """중요 작업 기록 (파일 복사 없이 정보만): 시각, 작업, 파일명, 원래 위치, 새 위치, 성공/실패. 비밀번호 등은 기록하지 않음."""
+    entry = {"time": time.time(), "action": action, "name": name, "from": src, "to": dst, "ok": ok, "detail": detail}
+    log.info("activity %s", json.dumps(entry, ensure_ascii=False))
+    with ACTIVITY_LOCK:
+        try:
+            with open(ACTIVITY_FILE, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            if ACTIVITY_FILE.stat().st_size > 2_000_000:  # 너무 커지면 최근 3000건만 남김
+                lines = ACTIVITY_FILE.read_text(encoding="utf-8").splitlines()[-3000:]
+                ACTIVITY_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        except OSError:
+            log.exception("activity_write_failed")
+
+
+@contextmanager
+def recorded(action, name, src="", dst=""):
+    """with 블록이 성공하면 성공, UserError 면 실패로 기록"""
+    info = {"dst": dst}
+    try:
+        yield info
+    except UserError as e:
+        record(action, name, src, info["dst"], False, e.message)
+        raise
+    record(action, name, src, info["dst"], True)
+
+
+def count_files(paths, cap=100_000):
+    """작업 대상이 되는 파일 수 (폴더는 안의 파일까지). cap 에서 멈춤."""
+    n = 0
+    for p in paths:
+        if p.is_dir():
+            for _, _, is_dir, _ in storage.walk(p, include_managed=True):
+                n += not is_dir
+                if n >= cap:
+                    return n
+        else:
+            n += 1
+    return n
+
+
+def mass_guard(confirm, url, fields, srcs):
+    """한 번에 MASS_OPERATION_THRESHOLD 개 이상, 또는 최근 몇 분 동안 합쳐서 그 이상의 파일이 바뀌면 추가 확인을 요구."""
+    n = count_files(srcs)
+    now = time.time()
+    with LOCK:
+        MASS_LOG[:] = [(t, c) for t, c in MASS_LOG if now - t < config.MASS_OPERATION_WINDOW_MINUTES * 60]
+        recent = sum(c for _, c in MASS_LOG)
+    if confirm != "yes" and (n >= config.MASS_OPERATION_THRESHOLD or recent + n >= config.MASS_OPERATION_THRESHOLD):
+        raise MassConfirm(url, fields, n, recent)
+    with LOCK:
+        if confirm == "yes":
+            MASS_LOG.clear()
+        else:
+            MASS_LOG.append((now, n))
+
+
 def redirect_files(request, path, message=None):
     if message:
         request.session["flash"] = message
@@ -468,20 +518,69 @@ def render_files(request, status=200, **ctx):
     ctx["flash"] = request.session.pop("flash", None)
     ctx["max_upload"] = config.MAX_UPLOAD_SIZE
     ctx["max_upload_text"] = format_size(config.MAX_UPLOAD_SIZE)
+    if not ctx["error"]:
+        try:
+            ctx["room"] = disk_info(get_root())["room"]
+        except (UserError, TypeError):
+            ctx["room"] = 0
     return templates.TemplateResponse(request, "files.html", ctx, status_code=status)
 
 
 def disk_info(root):
+    """SSD 용량과 단계별 경고 (표시만 하고 아무것도 지우지 않음)"""
     try:
         u = shutil.disk_usage(root)
     except OSError:
         return None
+    used = u.total - u.free  # Windows 탐색기와 같은 기준 (사용 중 = 전체 - 남은 공간)
     free_pct = u.free * 100 / u.total if u.total else 0
+    level = "critical" if free_pct <= config.CRITICAL_DISK_WARNING_PERCENT else "low" if free_pct <= config.LOW_DISK_WARNING_PERCENT else "ok"
     return {
-        "total": human_size(u.total), "used": human_size(u.used), "free": human_size(u.free),
-        "pct": round(u.used * 100 / u.total) if u.total else 0, "low": free_pct <= config.LOW_DISK_WARNING_PERCENT,
-        "warn_pct": config.LOW_DISK_WARNING_PERCENT,
+        "total": human_size(u.total), "used": human_size(used), "free": human_size(u.free),
+        "pct": round(used * 100 / u.total) if u.total else 0, "level": level, "low": level != "ok",
+        "warning": {"low": "SSD 저장공간이 부족해지고 있습니다.",
+                    "critical": "SSD 저장공간이 매우 부족합니다. 대용량 업로드를 확인하십시오."}.get(level),
+        "room": max(u.free - min_free_bytes(), 0),
     }
+
+
+def min_free_bytes():
+    return int(config.MIN_FREE_SPACE_GB * 1024**3)
+
+
+def ssd_health(root):
+    """SSD 읽기/쓰기 가능 여부 (60초마다 한 번, .myssd_temp 에 작은 파일을 만들었다 지워서 확인)"""
+    now = time.time()
+    if HEALTH_CACHE.get("root") == root and now - HEALTH_CACHE.get("t", 0) < 60:
+        return HEALTH_CACHE["v"]
+    v = {"readable": False, "writable": False, "label": storage.volume_label(os.path.splitdrive(str(root))[0] + "\\")}
+    try:
+        with os.scandir(root) as it:
+            next(it, None)
+        v["readable"] = True
+        probe = managed_dir(root, TEMP_DIR) / f"probe-{secrets.token_hex(4)}.tmp"
+        probe.write_bytes(b"ok")
+        probe.unlink()
+        v["writable"] = True
+    except OSError:
+        pass
+    HEALTH_CACHE.update(root=root, t=now, v=v)
+    return v
+
+
+def dir_usage(path):
+    """폴더가 차지하는 용량과 파일 수 (관리 폴더 용량 표시용)"""
+    size = files = 0
+    try:
+        if path.is_file():
+            return path.stat().st_size, 1
+        for _, _, is_dir, st in storage.walk(path, include_managed=True):
+            if not is_dir:
+                size += st.st_size
+                files += 1
+    except OSError:
+        pass
+    return size, files
 
 
 @app.exception_handler(LoginRequired)
@@ -495,7 +594,13 @@ def user_error(request: Request, exc: UserError):
         audit(request, "denied", url=request.url.path, query=request.url.query, reason=exc.message)
     if request.url.path == "/upload":
         return JSONResponse({"error": exc.message}, status_code=exc.status)
-    return render_files(request, exc.status, error=exc.message)
+    return render_files(request, exc.status, error=exc.message, ssd_down=isinstance(exc, SSDMissing))
+
+
+@app.exception_handler(MassConfirm)
+def mass_confirm(request: Request, exc: MassConfirm):
+    return page(request, "action.html", mode="mass", url=exc.url, fields=exc.fields, files=exc.files, recent=exc.recent,
+                threshold=config.MASS_OPERATION_THRESHOLD, window=config.MASS_OPERATION_WINDOW_MINUTES)
 
 
 @app.exception_handler(HTTPException)
@@ -600,6 +705,8 @@ def files(request: Request, path: str = "", sort: str = "", view: str = ""):
         request, current="/" + rel, parent=parent, entries=entries, path=rel, sort=sort, sorts=SORTS,
         view=request.session.get("view", "list"), favorites=set(load_favorites(root)),
         disk=disk_info(root) if not rel else None,
+        health=ssd_health(root) if not rel else None,
+        trash=trash_usage(root) if not rel else None,
     )
 
 
@@ -817,6 +924,12 @@ async def upload(request: Request, path: str = "", name: str = ""):
     root, folder = await run_in_threadpool(open_folder, path)
     name = clean_name(name.replace("\\", "/").rpartition("/")[2])
     expected = int(request.headers.get("content-length", "-1"))
+    free = (await run_in_threadpool(shutil.disk_usage, root)).free
+    if free - expected < min_free_bytes():
+        msg = (f"SSD 저장공간이 부족하여 업로드할 수 없습니다. (파일 {human_size(expected)}, 남은 공간 {human_size(free)}, "
+               f"최소 여유 공간 {config.MIN_FREE_SPACE_GB}GB)")
+        record("업로드", name, "", "/" + to_rel(root, folder), False, msg)
+        raise UserError(msg, 507)
     token = secrets.token_hex(8)
     tmp = None
     out = None
@@ -843,9 +956,11 @@ async def upload(request: Request, path: str = "", name: str = ""):
             target = await run_in_threadpool(move_unique, root, tmp, folder, name, False)
     except ClientDisconnect:
         audit(request, "upload_cancel", folder="/" + to_rel(root, folder), name=name, received=size)
+        record("업로드", name, "", "/" + to_rel(root, folder), False, "취소되었거나 연결이 끊김")
         return JSONResponse({"error": "업로드가 취소되었습니다."}, status_code=400)
     except UserError as e:
         audit(request, "upload_fail", folder="/" + to_rel(root, folder), name=name, reason=e.message)
+        record("업로드", name, "", "/" + to_rel(root, folder), False, e.message)
         raise
     finally:
         if out and not out.closed:
@@ -858,6 +973,7 @@ async def upload(request: Request, path: str = "", name: str = ""):
             except OSError:
                 pass
     audit(request, "upload", path="/" + to_rel(root, target), size=size)
+    record("업로드", target.name, "", "/" + to_rel(root, target.parent))
     flash = request.session.get("flash") or ""
     flash = (flash + ", " if flash.startswith("올린 파일:") else "올린 파일: ") + target.name
     request.session["flash"] = flash if len(flash) < 400 else flash[:400] + "…"
@@ -868,18 +984,19 @@ async def upload(request: Request, path: str = "", name: str = ""):
 def make_folder(request: Request, path: str = Form(""), name: str = Form(""), csrf: str = Form("")):
     check_csrf(request, csrf)
     root, folder = open_folder(path)
-    name = clean_name(name)
-    target = folder / name
-    if not is_inside(root, target.resolve()):
-        raise UserError("허용되지 않은 경로입니다.", 403)
-    try:
-        target.mkdir()
-    except FileExistsError:
-        raise UserError("같은 이름의 폴더나 파일이 이미 있습니다.", 409)
-    except PermissionError:
-        raise UserError("이 위치에 폴더를 만들 권한이 없습니다.", 403)
-    except OSError:
-        raise UserError("폴더를 만들 수 없습니다. SSD 연결 상태를 확인하세요.", 503)
+    with recorded("폴더 생성", name, "", "/" + to_rel(root, folder)):
+        name = clean_name(name)
+        target = folder / name
+        if not is_inside(root, target.resolve()):
+            raise UserError("허용되지 않은 경로입니다.", 403)
+        try:
+            target.mkdir()
+        except FileExistsError:
+            raise UserError("같은 이름의 폴더나 파일이 이미 있습니다.", 409)
+        except PermissionError:
+            raise UserError("이 위치에 폴더를 만들 권한이 없습니다.", 403)
+        except OSError:
+            raise UserError("폴더를 만들 수 없습니다. SSD 연결 상태를 확인하세요.", 503)
     audit(request, "mkdir", path="/" + to_rel(root, target))
     return redirect_files(request, path, f"'{name}' 폴더를 만들었습니다.")
 
@@ -900,20 +1017,23 @@ def rename_page(request: Request, path: str = ""):
 
 
 @private.post("/rename")
-def rename(request: Request, path: str = Form(""), name: str = Form(""), csrf: str = Form("")):
+def rename(request: Request, path: str = Form(""), name: str = Form(""), csrf: str = Form(""), mass_confirm: str = Form("")):
     check_csrf(request, csrf)
     root, src = open_item(path)
-    check_not_busy(src)
-    new_name = clean_name(name)
     parent = to_rel(root, src.parent)
-    if new_name == src.name:
+    if name.strip() == src.name:
         return redirect_files(request, parent)
-    dst = src.parent / new_name
-    if not is_inside(root, dst.resolve()):
-        raise UserError("허용되지 않은 경로입니다.", 403)
-    drop_thumb(root, src)
-    with fs_errors("이름을 변경"):
-        move_no_overwrite(src, dst)
+    mass_guard(mass_confirm, "/rename", [("path", path), ("name", name)], [src])
+    with recorded("이름 변경", src.name, "/" + to_rel(root, src)) as rec:
+        check_not_busy(src)
+        new_name = clean_name(name)
+        dst = src.parent / new_name
+        if not is_inside(root, dst.resolve()):
+            raise UserError("허용되지 않은 경로입니다.", 403)
+        drop_thumb(root, src)
+        with fs_errors("이름을 변경"):
+            move_no_overwrite(src, dst)
+        rec["dst"] = "/" + to_rel(root, dst)
     favorites_moved(root, to_rel(root, src), to_rel(root, dst))
     audit(request, "rename", path="/" + to_rel(root, src), new_name=new_name)
     return redirect_files(request, parent, f"이름을 바꿨습니다: {src.name} → {new_name}")
@@ -972,21 +1092,32 @@ def move_item(root, src, folder):
 
 
 @private.post("/move")
-def move(request: Request, path: str = Form(""), dest: str = Form(""), csrf: str = Form(""), sel: str = Form("")):
+def move(request: Request, path: str = Form(""), dest: str = Form(""), csrf: str = Form(""), sel: str = Form(""),
+         mass_confirm: str = Form("")):
     check_csrf(request, csrf)
     if not sel:
         root, src = open_item(path)
         _, folder = open_folder(dest)
-        dst = move_item(root, src, folder)
+        mass_guard(mass_confirm, "/move", [("path", path), ("dest", dest)], [src])
+        with recorded("이동", src.name, "/" + to_rel(root, src.parent), "/" + to_rel(root, folder)):
+            dst = move_item(root, src, folder)
         audit(request, "move", path="/" + to_rel(root, src), to="/" + to_rel(root, dst))
         return redirect_files(request, to_rel(root, src.parent), f"'{src.name}'을(를) /{to_rel(root, folder)} 로 옮겼습니다.")
     origin, paths = get_selection(sel)
     root, folder = open_folder(dest)
+    srcs = []
+    for p in paths:
+        try:
+            srcs.append(open_item(p)[1])
+        except UserError:
+            pass
+    mass_guard(mass_confirm, "/move", [("sel", sel), ("dest", dest)], srcs)
     moved, failed = 0, []
     for p in paths:
         try:
-            _, src = open_item(p)
-            dst = move_item(root, src, folder)
+            with recorded("이동", p.rpartition("/")[2], "/" + p.rpartition("/")[0], "/" + to_rel(root, folder)):
+                _, src = open_item(p)
+                dst = move_item(root, src, folder)
             audit(request, "move", path="/" + p, to="/" + to_rel(root, dst))
             moved += 1
         except UserError as e:
@@ -1000,16 +1131,19 @@ def move(request: Request, path: str = Form(""), dest: str = Form(""), csrf: str
 
 
 @private.post("/delete")
-def delete(request: Request, path: str = Form(""), csrf: str = Form("")):
+def delete(request: Request, path: str = Form(""), csrf: str = Form(""), mass_confirm: str = Form("")):
     check_csrf(request, csrf)
     root, src = open_item(path)
-    meta = trash_item(root, src)
+    mass_guard(mass_confirm, "/delete", [("path", path)], [src])
+    with recorded("휴지통 이동", src.name, "/" + to_rel(root, src.parent), "휴지통"):
+        meta = trash_item(root, src)
     audit(request, "trash", path="/" + to_rel(root, src), trash_id=meta["id"])
     return redirect_files(request, meta["original_path"], f"휴지통으로 옮겼습니다: {src.name} (휴지통에서 복원할 수 있습니다)")
 
 
 @private.post("/bulk")
-def bulk(request: Request, action: str = Form(""), paths: list[str] = Form([]), path: str = Form(""), csrf: str = Form("")):
+def bulk(request: Request, action: str = Form(""), paths: list[str] = Form([]), path: str = Form(""), csrf: str = Form(""),
+         mass_confirm: str = Form("")):
     """여러 항목 선택 후 [이동] / [휴지통]. 휴지통도 영구 삭제가 아니라 .myssd_trash 로 이동."""
     check_csrf(request, csrf)
     root, _ = open_folder(path)
@@ -1023,11 +1157,19 @@ def bulk(request: Request, action: str = Form(""), paths: list[str] = Form([]), 
         return RedirectResponse(f"/move?sel={sel}", status_code=303)
     if action != "trash":
         raise UserError("잘못된 요청입니다.")
+    srcs = []
+    for p in paths:
+        try:
+            srcs.append(open_item(p)[1])
+        except UserError:
+            pass
+    mass_guard(mass_confirm, "/bulk", [("action", "trash"), ("path", path)] + [("paths", p) for p in paths], srcs)
     done, failed = 0, []
     for p in paths:
         try:
-            _, src = open_item(p)
-            meta = trash_item(root, src)
+            with recorded("휴지통 이동", p.rpartition("/")[2], "/" + p.rpartition("/")[0], "휴지통"):
+                _, src = open_item(p)
+                meta = trash_item(root, src)
             audit(request, "trash", path="/" + p, trash_id=meta["id"])
             done += 1
         except UserError as e:
@@ -1082,8 +1224,11 @@ def read_trash(root, tid):
     return meta
 
 
+TRASH_SORTS = {"new": "최근 삭제순", "old": "오래된 삭제순", "size": "큰 파일순", "name": "이름순"}
+
+
 @private.get("/trash")
-def trash_page(request: Request):
+def trash_page(request: Request, sort: str = "new"):
     root = get_root()
     items = []
     trash = root / TRASH_DIR
@@ -1096,8 +1241,15 @@ def trash_page(request: Request):
             items.append(read_trash(root, tid))
         except UserError:
             continue
-    items.sort(key=lambda m: m.get("deleted_at", ""), reverse=True)
-    return page(request, "trash.html", items=items)
+    for m in items:
+        m["size"], m["files"] = dir_usage(m["item"])
+    sort = sort if sort in TRASH_SORTS else "new"
+    keys = {"new": (lambda m: m.get("deleted_at", ""), True), "old": (lambda m: m.get("deleted_at", ""), False),
+            "size": (lambda m: m["size"], True), "name": (lambda m: m["name"].lower(), False)}
+    key, rev = keys[sort]
+    items.sort(key=key, reverse=rev)
+    return page(request, "trash.html", items=items, sort=sort, sorts=TRASH_SORTS,
+                total_size=sum(m["size"] for m in items), total_files=sum(m["files"] for m in items))
 
 
 @private.post("/trash/restore")
@@ -1105,13 +1257,14 @@ def trash_restore(request: Request, id: str = Form(""), csrf: str = Form("")):
     check_csrf(request, csrf)
     root = get_root()
     meta = read_trash(root, id)
-    _, parent = safe_path(meta.get("original_path", ""))
-    with fs_errors("복원"):
-        if not os.path.lexists(meta["item"]):
-            raise UserError("휴지통 항목이 손상되었습니다.", 404)
-        parent.mkdir(parents=True, exist_ok=True)
-        target = move_unique(root, meta["item"], parent, meta["name"], meta["kind"] == "dir")
-        (root / TRASH_DIR / f"{id}.json").unlink(missing_ok=True)
+    with recorded("휴지통 복원", meta["name"], "휴지통", "/" + meta.get("original_path", "")):
+        _, parent = safe_path(meta.get("original_path", ""))
+        with fs_errors("복원"):
+            if not os.path.lexists(meta["item"]):
+                raise UserError("휴지통 항목이 손상되었습니다.", 404)
+            parent.mkdir(parents=True, exist_ok=True)
+            target = move_unique(root, meta["item"], parent, meta["name"], meta["kind"] == "dir")
+            (root / TRASH_DIR / f"{id}.json").unlink(missing_ok=True)
     try:
         meta["box"].rmdir()
     except OSError:
@@ -1129,6 +1282,71 @@ def purge_page(request: Request, id: str = ""):
     return render_action(request, "purge", item=meta)
 
 
+def purge_item(root, meta):
+    with fs_errors("영구 삭제"):
+        shutil.rmtree(meta["box"], onerror=_force_remove)
+        (root / TRASH_DIR / f"{meta['id']}.json").unlink(missing_ok=True)
+
+
+def trash_usage(root):
+    """휴지통에 든 항목들의 실제 용량·파일 수 (기록용 .json 제외)"""
+    size = files = 0
+    for tid in trash_ids(root):
+        s, f = dir_usage(root / TRASH_DIR / tid)
+        size, files = size + s, files + f
+    return size, files
+
+
+def trash_ids(root):
+    trash = root / TRASH_DIR
+    try:
+        return [f.stem for f in trash.glob("*.json") if TRASH_ID.match(f.stem)] if trash.is_dir() else []
+    except OSError:
+        raise UserError("휴지통을 읽을 수 없습니다. SSD 연결 상태를 확인하세요.", 503)
+
+
+@private.get("/trash/empty")
+def empty_page(request: Request):
+    root = get_root()
+    size, files = trash_usage(root)
+    return render_action(request, "empty1", items=len(trash_ids(root)), size=size, files=files)
+
+
+@private.post("/trash/empty")
+def empty_trash(request: Request, csrf: str = Form(""), step: str = Form(""), token: str = Form(""), confirm: str = Form("")):
+    """휴지통 비우기: 1차 확인 → 2차 확인(확인란). 1차 확인 때 있던 항목만 지운다."""
+    check_csrf(request, csrf)
+    root = get_root()
+    now = time.time()
+    if step == "1":
+        ids = trash_ids(root)
+        if not ids:
+            request.session["flash"] = "휴지통이 비어 있습니다."
+            return RedirectResponse("/trash", status_code=303)
+        token = secrets.token_urlsafe(16)
+        with LOCK:
+            EMPTY_TOKENS[token] = (now + 600, ids)
+        size, files = trash_usage(root)
+        return render_action(request, "empty2", token=token, items=len(ids), size=size, files=files)
+    with LOCK:
+        for k in [k for k, v in EMPTY_TOKENS.items() if v[0] < now]:
+            del EMPTY_TOKENS[k]
+        entry = EMPTY_TOKENS.pop(token, None) if confirm == "yes" else None
+    if not entry:
+        raise UserError("휴지통 비우기 확인이 완료되지 않았습니다. 처음부터 다시 진행하세요.")
+    done, failed = 0, 0
+    for tid in entry[1]:
+        try:
+            purge_item(root, read_trash(root, tid))
+            done += 1
+        except UserError:
+            failed += 1
+    record("휴지통 비우기", f"{done}개 항목", "휴지통", "", failed == 0, f"실패 {failed}개" if failed else "")
+    audit(request, "trash_empty", items=done, failed=failed)
+    request.session["flash"] = f"휴지통을 비웠습니다: {done}개 항목 영구 삭제" + (f" (실패 {failed}개)" if failed else "")
+    return RedirectResponse("/trash", status_code=303)
+
+
 def _force_remove(func, path, exc_info):
     os.chmod(path, stat.S_IWRITE)  # Windows 읽기 전용 파일
     func(path)
@@ -1141,12 +1359,90 @@ def purge(request: Request, id: str = Form(""), csrf: str = Form(""), confirm: s
         raise UserError("영구 삭제 확인란을 체크해야 삭제됩니다.")
     root = get_root()
     meta = read_trash(root, id)
-    with fs_errors("영구 삭제"):
-        shutil.rmtree(meta["box"], onerror=_force_remove)
-        (root / TRASH_DIR / f"{id}.json").unlink(missing_ok=True)
+    with recorded("영구 삭제", meta["name"], "/" + meta.get("original_path", "")):
+        purge_item(root, meta)
     audit(request, "purge", trash_id=id, name=meta["name"], original="/" + meta.get("original_path", ""))
     request.session["flash"] = f"영구 삭제했습니다: {meta['name']}"
     return RedirectResponse("/trash", status_code=303)
+
+
+@private.get("/activity")
+def activity(request: Request):
+    entries = []
+    try:
+        lines = ACTIVITY_FILE.read_text(encoding="utf-8").splitlines()[-300:]
+    except OSError:
+        lines = []
+    for line in reversed(lines):
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        e["group"] = day_label(e["time"])
+        entries.append(e)
+    return page(request, "activity.html", entries=entries)
+
+
+def stale_temp_files(root):
+    """정리해도 안전한 임시 파일: 업로드 임시 파일 이름 모양이고, 진행 중인 업로드가 아니며, 1시간 넘게 안 바뀐 것만."""
+    d = root / TEMP_DIR
+    with LOCK:
+        active = set(ACTIVE_UPLOADS)
+    out = []
+    try:
+        for f in d.iterdir():
+            if TEMP_PART.match(f.name) and f.stem not in active and f.is_file() and time.time() - f.stat().st_mtime > 3600:
+                out.append(f)
+    except OSError:
+        pass
+    return out
+
+
+@private.get("/manage")
+def manage(request: Request):
+    root = get_root()
+    usage = {"휴지통": trash_usage(root)}
+    usage.update({name: dir_usage(root / d) for name, d in (("썸네일 캐시", CACHE_DIR), ("임시 파일", TEMP_DIR), ("즐겨찾기·설정", META_DIR))})
+    stale = stale_temp_files(root)
+    return page(request, "manage.html", disk=disk_info(root), health=ssd_health(root), usage=usage, root=str(root),
+                stale=len(stale), stale_size=sum(f.stat().st_size for f in stale), min_free=config.MIN_FREE_SPACE_GB)
+
+
+@private.post("/manage/cache/clear")
+def clear_cache(request: Request, csrf: str = Form(""), confirm: str = Form("")):
+    """썸네일 캐시만 삭제 (다시 만들 수 있는 파일). 원본 사진·동영상은 건드리지 않음."""
+    check_csrf(request, csrf)
+    if confirm != "yes":
+        raise UserError("확인이 필요합니다.")
+    d = get_root() / THUMB_DIR
+    n = 0
+    for f in (d.iterdir() if d.is_dir() else []):
+        if f.is_file() and f.suffix in (".jpg", ".fail", ".tmp"):
+            try:
+                f.unlink()
+                n += 1
+            except OSError:
+                pass
+    audit(request, "thumb_cache_clear", files=n)
+    request.session["flash"] = f"썸네일 캐시 {n}개를 정리했습니다. (사진을 다시 볼 때 새로 만들어집니다)"
+    return RedirectResponse("/manage", status_code=303)
+
+
+@private.post("/manage/temp/clean")
+def clean_temp(request: Request, csrf: str = Form(""), confirm: str = Form("")):
+    check_csrf(request, csrf)
+    if confirm != "yes":
+        raise UserError("확인이 필요합니다.")
+    n = 0
+    for f in stale_temp_files(get_root()):
+        try:
+            f.unlink()
+            n += 1
+        except OSError:
+            pass
+    audit(request, "temp_clean", files=n)
+    request.session["flash"] = f"남아 있던 업로드 임시 파일 {n}개를 정리했습니다."
+    return RedirectResponse("/manage", status_code=303)
 
 
 app.include_router(private)

@@ -4,6 +4,7 @@ __pycache__/
 *.log
 *.log.*
 logs/
+activity.jsonl
 *.part
 # MySSD 관리 폴더 (SSD 안에 생김 — 저장소에 들어오면 안 됨)
 .myssd_temp/

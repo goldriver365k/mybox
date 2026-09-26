@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}내 SSD - 최근 작업{% endblock %}
+{% block main %}
+  <h2>최근 작업</h2>
+  <ul class="list">
+    {% for e in entries %}
+    {% if loop.first or e.group != loop.previtem.group %}<li class="group">{{ e.group }}</li>{% endif %}
+    <li class="row">
+      <span class="thumb">{{ "✅" if e.ok else "❌" }}</span>
+      <div class="body">
+        <span class="name">{{ e.name }}</span>
+        <div class="meta">{{ e.time|date }} · <b>{{ e.action }}</b>{% if not e.ok %} 실패{% endif %}
+          {% if e["from"] %}<br>원래 위치: {{ e["from"] }}{% endif %}{% if e.to %}<br>새 위치: {{ e.to }}{% endif %}
+          {% if e.detail %}<br>{{ e.detail }}{% endif %}</div>
+      </div>
+    </li>
+    {% else %}
+    <li class="empty">기록된 작업이 없습니다.</li>
+    {% endfor %}
+  </ul>
+  <p class="note">업로드·폴더 생성·이름 변경·이동·휴지통 이동·복원·영구 삭제·휴지통 비우기가 기록됩니다 (파일 복사 없이 정보만, 최근 300건 표시).</p>
+{% endblock %}

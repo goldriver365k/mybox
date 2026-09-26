@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% import "_macros.html" as m %}
 {% block main %}
-  {% set icon = {"dir": "📁", "image": "🖼", "video": "🎬"}.get(item.kind, "📄") %}
+  {% set icon = {"dir": "📁", "image": "🖼", "video": "🎬"}.get(item.kind, "📄") if item is defined else "" %}
   {% if mode == "rename" %}
   <h2>이름 변경</h2>
   <p class="where">{{ icon }} /{{ item.path }}</p>
@@ -60,9 +60,47 @@
   </div>
   {{ m.star(item, [item.path] if favorite else [], csrf, "/info?path=" ~ item.path|urlencode) }}
 
+  {% elif mode == "mass" %}
+  <h2>대량 파일 작업입니다</h2>
+  <p class="error">⚠ {{ threshold }}개 이상의 파일이 변경됩니다.</p>
+  <p class="where">이번 작업: 파일 {{ "{:,}".format(files) }}개{% if files >= 100000 %} 이상{% endif %}
+    {% if recent %}<br>최근 {{ window }}분 동안 이미 변경한 파일: {{ "{:,}".format(recent) }}개{% endif %}</p>
+  <form class="box" method="post" action="{{ url }}">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    {% for k, v in fields %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+    <input type="hidden" name="mass_confirm" value="yes">
+    <label class="check"><input type="checkbox" required> 많은 파일이 바뀌는 작업임을 확인했습니다.</label>
+    <button class="btn danger">계속 진행</button>
+    <a class="btn gray" href="javascript:history.back()">취소</a>
+  </form>
+
+  {% elif mode == "empty1" %}
+  <h2>휴지통 비우기 (1/2)</h2>
+  <p class="warn">휴지통의 모든 파일을 삭제하시겠습니까?</p>
+  <p class="where">항목 {{ items }}개 · 파일 {{ "{:,}".format(files) }}개 · {{ size|size }}</p>
+  <form class="box" method="post" action="/trash/empty">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="step" value="1">
+    <button class="btn danger">다음 (마지막 확인)</button>
+    <a class="btn gray" href="/trash">취소</a>
+  </form>
+
+  {% elif mode == "empty2" %}
+  <h2>휴지통 비우기 (2/2)</h2>
+  <p class="error">영구 삭제된 파일은 복구할 수 없습니다.</p>
+  <p class="where">항목 {{ items }}개 · 파일 {{ "{:,}".format(files) }}개 · {{ size|size }} 를 영구 삭제합니다.</p>
+  <form class="box" method="post" action="/trash/empty">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="step" value="2">
+    <input type="hidden" name="token" value="{{ token }}">
+    <label class="check"><input type="checkbox" name="confirm" value="yes" required> 복구할 수 없다는 것을 확인했습니다.</label>
+    <button class="btn danger">휴지통 비우기</button>
+    <a class="btn gray" href="/trash">취소</a>
+  </form>
+
   {% elif mode == "purge" %}
   <h2>영구 삭제</h2>
-  <p class="error">이 파일을 영구 삭제하면 복구할 수 없습니다.</p>
+  <p class="error">이 파일은 영구 삭제되며 복구할 수 없습니다.</p>
   <p class="where">{{ icon }} {{ item.name }}<br>원래 위치: /{{ item.original_path }}<br>삭제한 날짜: {{ item.deleted_at }}</p>
   <form class="box" method="post" action="/trash/purge">
     <input type="hidden" name="csrf" value="{{ csrf }}">

@@ -8,6 +8,11 @@ from pathlib import Path
 # 외장 SSD 경로. 드라이브 문자가 바뀌면 여기만 수정하세요. (예: "F:\\")
 SSD_ROOT = "E:\\"
 
+# (선택, Windows) 외장 SSD의 볼륨 이름. 예: "MYSSD"
+# 설정하면 이 이름의 SSD만 사용하고, 드라이브 문자가 바뀌어도(E: → F:) 같은 이름의 드라이브가 딱 하나면 자동으로 찾습니다.
+# 같은 이름이 없거나 여러 개면 다른 디스크를 쓰지 않고 오류를 표시합니다.
+SSD_VOLUME_LABEL = ""
+
 PORT = 8000
 
 # 서버 수신 주소. "0.0.0.0" = Tailscale 기기에서 접속 가능 (아래 ALLOWED_NETWORKS 로 제한됨)
@@ -35,8 +40,17 @@ MEDIA_LIST_LIMIT = 300
 # 전체 검색·최근 파일·사진/동영상 모아보기가 SSD를 훑는 최대 시간(초). 넘으면 찾은 데까지만 표시
 SCAN_TIME_LIMIT = 15
 
-# SSD 남은 공간이 이 비율(%) 이하이면 홈 화면에 경고 (자동 삭제는 하지 않음)
-LOW_DISK_WARNING_PERCENT = 10
+# SSD 남은 공간 경고 기준(%). 경고만 하며 파일을 자동으로 지우지 않음
+LOW_DISK_WARNING_PERCENT = 15
+CRITICAL_DISK_WARNING_PERCENT = 5
+
+# 업로드 후에도 최소한 이만큼(GB)은 비워 둠. 넘으면 업로드를 시작하지 않음
+MIN_FREE_SPACE_GB = 20
+
+# 한 번에(또는 MASS_OPERATION_WINDOW_MINUTES 분 동안 합쳐서) 이 개수 이상의 파일을
+# 휴지통 이동/이동/이름 변경하면 "대량 파일 작업" 확인을 한 번 더 받음
+MASS_OPERATION_THRESHOLD = 100
+MASS_OPERATION_WINDOW_MINUTES = 10
 
 # 사진 썸네일 크기(px)와 썸네일 캐시 최대 크기(SSD_ROOT/.myssd_cache/thumbnails)
 THUMB_SIZE = 256
