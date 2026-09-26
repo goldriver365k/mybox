@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>내 SSD - 휴지통</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<main>
+  <h1><a href="/files">내 SSD</a></h1>
+  <p class="where">휴지통</p>
+  <p><a class="btn" href="/files">← 파일 목록</a></p>
+  {% if flash %}<p class="ok">{{ flash }}</p>{% endif %}
+  <ul class="list">
+    {% for t in items %}
+    <li>
+      <div class="name">{{ {"dir": "📁", "image": "🖼", "video": "🎬"}.get(t.kind, "📄") }} {{ t.name }}</div>
+      <div class="meta">원래 위치: /{{ t.original_path }}<br>삭제한 날짜: {{ t.deleted_at }}</div>
+      <div class="acts">
+        <form method="post" action="/trash/restore">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <input type="hidden" name="id" value="{{ t.id }}">
+          <button class="restore">복원</button>
+        </form>
+        <a class="quiet" href="/trash/purge?id={{ t.id }}">영구 삭제</a>
+      </div>
+    </li>
+    {% else %}
+    <li class="empty">휴지통이 비어 있습니다.</li>
+    {% endfor %}
+  </ul>
+  <p class="note">삭제한 항목은 SSD 안의 휴지통에 보관되며, 복원하거나 영구 삭제하기 전까지 SSD 공간을 차지합니다.</p>
+</main>
+</body>
+</html>

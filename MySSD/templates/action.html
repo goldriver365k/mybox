@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>내 SSD</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<main>
+  <h1><a href="/files">내 SSD</a></h1>
+  {% set icon = {"dir": "📁", "image": "🖼", "video": "🎬"}.get(item.kind, "📄") %}
+  {% if mode == "rename" %}
+  <h2>이름 변경</h2>
+  <p class="where">{{ icon }} /{{ item.path }}</p>
+  <form class="box" method="post" action="/rename">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="path" value="{{ item.path }}">
+    <label>새 이름<input name="name" value="{{ item.name }}" maxlength="200" required autofocus></label>
+    <button class="btn">이름 변경</button>
+    <a class="btn gray" href="/files?path={{ item.parent|urlencode }}">취소</a>
+  </form>
+
+  {% elif mode == "move" %}
+  <h2>이동</h2>
+  <p class="where">이동할 항목: {{ icon }} /{{ item.path }}</p>
+  <p class="where">옮길 폴더: <b>/{{ dest }}</b></p>
+  {% if dest_parent is not none %}
+  <p><a class="btn" href="/move?path={{ item.path|urlencode }}&dest={{ dest_parent|urlencode }}">← 상위 폴더</a></p>
+  {% endif %}
+  <ul class="list">
+    {% for d in folders %}
+    <li><a class="name" href="/move?path={{ item.path|urlencode }}&dest={{ d.path|urlencode }}">📁 {{ d.name }}</a></li>
+    {% else %}
+    <li class="empty">하위 폴더가 없습니다.</li>
+    {% endfor %}
+  </ul>
+  <form class="box" method="post" action="/move">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="path" value="{{ item.path }}">
+    <input type="hidden" name="dest" value="{{ dest }}">
+    <button class="btn">여기(/{{ dest }})로 이동</button>
+    <a class="btn gray" href="/files?path={{ item.parent|urlencode }}">취소</a>
+  </form>
+
+  {% elif mode == "purge" %}
+  <h2>영구 삭제</h2>
+  <p class="error">이 파일을 영구 삭제하면 복구할 수 없습니다.</p>
+  <p class="where">{{ icon }} {{ item.name }}<br>원래 위치: /{{ item.original_path }}<br>삭제한 날짜: {{ item.deleted_at }}</p>
+  <form class="box" method="post" action="/trash/purge">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="id" value="{{ item.id }}">
+    <label class="check"><input type="checkbox" name="confirm" value="yes" required> 복구할 수 없다는 것을 확인했습니다.</label>
+    <button class="btn danger">영구 삭제</button>
+    <a class="btn gray" href="/trash">취소</a>
+  </form>
+  {% endif %}
+</main>
+</body>
+</html>

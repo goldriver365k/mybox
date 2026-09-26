@@ -2,6 +2,10 @@
 __pycache__/
 *.pyc
 *.log
+*.log.*
+logs/
 *.part
+.myssd_temp/
+.myssd_trash/
 .venv/
 venv/
