@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>내 SSD - {{ name }}</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<main>
+  <h1><a href="/files">내 SSD</a></h1>
+  <p class="where">{{ name }}</p>
+  <p>
+    <a class="btn" href="/download?path={{ path|urlencode }}">다운로드</a>
+    <a class="btn gray" href="/files?path={{ parent|urlencode }}">뒤로가기</a>
+  </p>
+  <div class="preview">
+    {% if kind == "image" %}
+    <img src="/raw?path={{ path|urlencode }}" alt="{{ name }}">
+    {% else %}
+    <video src="/raw?path={{ path|urlencode }}" controls playsinline preload="metadata">이 브라우저는 동영상 재생을 지원하지 않습니다.</video>
+    {% endif %}
+  </div>
+</main>
+</body>
+</html>

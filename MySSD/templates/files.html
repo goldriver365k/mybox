@@ -8,19 +8,41 @@
 </head>
 <body>
 <main>
-  <h1><a href="/">내 SSD</a></h1>
+  <header class="top">
+    <h1><a href="/files">내 SSD</a></h1>
+    <form method="post" action="/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn gray">로그아웃</button></form>
+  </header>
+  {% if flash %}<p class="ok">{{ flash }}</p>{% endif %}
   {% if error %}
   <p class="error">{{ error }}</p>
   <p><a class="btn" href="/files">처음으로</a></p>
   {% else %}
   <p class="where">현재 위치: {{ current }}</p>
+  <div class="tools">
+    <form method="post" action="/upload" enctype="multipart/form-data">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="path" value="{{ path }}">
+      <input type="file" name="files" multiple required>
+      <button class="btn">파일 올리기</button>
+    </form>
+    <form method="post" action="/folder">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="path" value="{{ path }}">
+      <input name="name" placeholder="새 폴더 이름" maxlength="200" required>
+      <button class="btn">새 폴더</button>
+    </form>
+  </div>
   {% if parent is not none %}
   <p><a class="btn" href="/files?path={{ parent|urlencode }}">← 상위 폴더</a></p>
   {% endif %}
   <ul class="list">
     {% for e in entries %}
-    {% if e.is_dir %}
+    {% if e.kind == "dir" %}
     <li><a href="/files?path={{ e.path|urlencode }}">📁 {{ e.name }}</a></li>
+    {% elif e.kind == "image" %}
+    <li><a href="/view?path={{ e.path|urlencode }}">🖼 {{ e.name }}</a></li>
+    {% elif e.kind == "video" %}
+    <li><a href="/view?path={{ e.path|urlencode }}">🎬 {{ e.name }}</a></li>
     {% else %}
     <li><a href="/download?path={{ e.path|urlencode }}">📄 {{ e.name }}</a></li>
     {% endif %}

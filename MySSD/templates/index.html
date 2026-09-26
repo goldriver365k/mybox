@@ -10,7 +10,12 @@
 <main class="home">
   <h1>내 SSD</h1>
   <p class="sub">개인 파일 서버</p>
-  <a class="btn" href="/files">SSD 열기</a>
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  <form class="login" method="post" action="/login">
+    <label>아이디<input name="username" autocomplete="username" required autofocus></label>
+    <label>비밀번호<input name="password" type="password" autocomplete="current-password" required></label>
+    <button class="btn" type="submit">로그인</button>
+  </form>
 </main>
 </body>
 </html>
