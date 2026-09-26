@@ -8,30 +8,32 @@
 </head>
 <body>
 <main>
-  <header class="top">
-    <h1><a href="/files">내 SSD</a></h1>
+  <h1><a href="/files">내 SSD</a></h1>
+  {% if not error %}<p class="where">현재 위치: {{ current }}</p>{% endif %}
+  <div class="tools">
+    {% if not error %}
+    <form id="upload" method="post" action="/upload" enctype="multipart/form-data" data-max="{{ max_upload }}">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="path" value="{{ path }}">
+      <label class="btn">파일 올리기<input class="hide" type="file" name="files" multiple></label>
+    </form>
+    <a class="btn" href="#newfolder">새 폴더</a>
+    {% endif %}
     <form method="post" action="/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn gray">로그아웃</button></form>
-  </header>
+  </div>
   {% if flash %}<p class="ok">{{ flash }}</p>{% endif %}
   {% if error %}
   <p class="error">{{ error }}</p>
   <p><a class="btn" href="/files">처음으로</a></p>
   {% else %}
-  <p class="where">현재 위치: {{ current }}</p>
-  <div class="tools">
-    <form method="post" action="/upload" enctype="multipart/form-data">
-      <input type="hidden" name="csrf" value="{{ csrf }}">
-      <input type="hidden" name="path" value="{{ path }}">
-      <input type="file" name="files" multiple required>
-      <button class="btn">파일 올리기</button>
-    </form>
-    <form method="post" action="/folder">
-      <input type="hidden" name="csrf" value="{{ csrf }}">
-      <input type="hidden" name="path" value="{{ path }}">
-      <input name="name" placeholder="새 폴더 이름" maxlength="200" required>
-      <button class="btn">새 폴더</button>
-    </form>
-  </div>
+  <p id="status" class="ok" hidden></p>
+  <form id="newfolder" class="newfolder" method="post" action="/folder">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="path" value="{{ path }}">
+    <input name="name" placeholder="새 폴더 이름" maxlength="200" required>
+    <button class="btn">만들기</button>
+    <a class="btn gray" href="#">취소</a>
+  </form>
   {% if parent is not none %}
   <p><a class="btn" href="/files?path={{ parent|urlencode }}">← 상위 폴더</a></p>
   {% endif %}
@@ -52,5 +54,17 @@
   </ul>
   {% endif %}
 </main>
+<script>
+var f = document.getElementById("upload");
+if (f) f.querySelector("input[type=file]").onchange = function () {
+  var total = 0;
+  for (var i = 0; i < this.files.length; i++) total += this.files[i].size;
+  if (!this.files.length) return;
+  if (total > +f.dataset.max) { alert("업로드 최대 크기({{ max_upload_text }})를 넘었습니다."); this.value = ""; return; }
+  var st = document.getElementById("status");
+  st.hidden = false; st.textContent = this.files.length + "개 파일을 올리는 중입니다... 완료될 때까지 이 화면을 닫지 마세요.";
+  f.submit();
+};
+</script>
 </body>
 </html>

@@ -10,6 +10,23 @@ SSD_ROOT = "E:\\"
 
 PORT = 8000
 
+# 서버 수신 주소. "0.0.0.0" = Tailscale 기기에서 접속 가능 (아래 ALLOWED_NETWORKS 로 제한됨)
+#                "127.0.0.1" = 이 PC에서만 접속
+# 공유기 포트포워딩은 절대 하지 마세요.
+HOST = "0.0.0.0"
+
+# 접속을 허용할 주소 범위: 이 PC 자신 + Tailscale 주소만. 같은 와이파이의 다른 기기도 차단됩니다.
+ALLOWED_NETWORKS = ["127.0.0.0/8", "::1/128", "100.64.0.0/10", "fd7a:115c:a1e0::/48"]
+
+# 한 번에 올릴 수 있는 최대 크기 (기본 20GB). 예: 5GB = 5 * 1024**3
+MAX_UPLOAD_SIZE = 20 * 1024**3
+
+# 로그인 연속 실패 LOGIN_MAX_FAILS 회 → LOGIN_LOCK_SECONDS 초 동안 로그인 차단 (접속 기기별)
+LOGIN_MAX_FAILS = 5
+LOGIN_LOCK_SECONDS = 300
+
+SESSION_HOURS = 12
+
 # 계정 정보는 .env 파일(또는 환경변수)에서 읽습니다. 만들기: python config.py
 ENV_FILE = Path(__file__).parent / ".env"
 PBKDF2_ITERATIONS = 600_000
