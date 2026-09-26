@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}내 SSD{% endblock %}</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="/files">내 SSD</a>
+  <form class="search" action="/search" role="search">
+    <input type="search" name="q" value="{{ q or '' }}" placeholder="🔍 파일 또는 폴더 검색" maxlength="100" enterkeyhint="search">
+  </form>
+  <form method="post" action="/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="logout">로그아웃</button></form>
+</header>
+<main>
+  {% if flash %}<p class="ok">{{ flash }}</p>{% endif %}
+  {% block main %}{% endblock %}
+</main>
+<nav class="bottom">
+  <a href="/files">🏠<span>홈</span></a>
+  <a href="/recent">🕘<span>최근</span></a>
+  {% block navupload %}{% endblock %}
+  <a href="/favorites">⭐<span>즐겨찾기</span></a>
+  <a href="/trash">🗑<span>휴지통</span></a>
+</nav>
+{% block script %}{% endblock %}
+</body>
+</html>

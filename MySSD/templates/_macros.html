@@ -1,0 +1,25 @@
+{% macro icon(e) %}{{ {"dir": "📁", "image": "🖼", "video": "🎬"}.get(e.kind, "📄") }}{% endmacro %}
+
+{% macro open_url(e) -%}
+{%- if e.kind == "dir" %}/files?path={{ e.path|urlencode }}
+{%- elif e.kind in ("image", "video") %}/view?path={{ e.path|urlencode }}
+{%- else %}/download?path={{ e.path|urlencode }}{% endif -%}
+{%- endmacro %}
+
+{% macro thumb(e) -%}
+<a class="thumb" href="{{ open_url(e) }}" aria-hidden="true" tabindex="-1">
+  {%- if e.kind == "image" and not e.missing %}<img loading="lazy" src="/thumb?path={{ e.path|urlencode }}" alt="" onerror="this.parentNode.textContent='🖼'">
+  {%- else %}{{ icon(e) }}{% endif -%}
+</a>
+{%- endmacro %}
+
+{% macro star(e, favorites, csrf, next) -%}
+<form class="star" method="post" action="/favorite">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <input type="hidden" name="path" value="{{ e.path }}">
+  <input type="hidden" name="next" value="{{ next }}">
+  {% if e.path in favorites %}<button title="즐겨찾기 해제" class="on">★</button>{% else %}<button title="즐겨찾기">☆</button>{% endif %}
+</form>
+{%- endmacro %}
+
+{% macro location(e) %}/{{ e.parent }}{% if e.parent %}/{% endif %}{% endmacro %}

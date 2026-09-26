@@ -1,30 +1,39 @@
-<!doctype html>
-<html lang="ko">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>내 SSD - {{ current }}</title>
-<link rel="stylesheet" href="/static/style.css">
-</head>
-<body>
-<main>
-  <h1><a href="/files">내 SSD</a></h1>
-  {% if not error %}<p class="where">현재 위치: {{ current }}</p>{% endif %}
-  <div class="tools">
-    {% if not error %}
-    <form id="upload" data-max="{{ max_upload }}" data-max-text="{{ max_upload_text }}" data-path="{{ path }}" data-csrf="{{ csrf }}">
-      <label class="btn">파일 올리기<input class="hide" type="file" multiple></label>
-    </form>
-    <a class="btn" href="#newfolder">새 폴더</a>
-    {% endif %}
-    <a class="btn" href="/trash">휴지통</a>
-    <form method="post" action="/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn gray">로그아웃</button></form>
-  </div>
-  {% if flash %}<p class="ok">{{ flash }}</p>{% endif %}
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% set here = request.url.path ~ ("?" ~ request.url.query if request.url.query else "") %}
+{% block title %}내 SSD - {{ current }}{% endblock %}
+{% block main %}
   {% if error %}
   <p class="error">{{ error }}</p>
   <p><a class="btn" href="/files">처음으로</a></p>
   {% else %}
+  {% if path == "" %}
+  <div class="quick">
+    <a href="/recent">🕘 최근 파일</a>
+    <a href="/favorites">⭐ 즐겨찾기</a>
+    <a href="/media?kind=image">🖼 사진</a>
+    <a href="/media?kind=video">🎬 동영상</a>
+    <a href="/trash">🗑 휴지통</a>
+  </div>
+  {% if disk %}
+  <div class="card disk">
+    <b>저장공간</b>
+    <div>{{ disk.used }} / {{ disk.total }} 사용</div>
+    <div class="bar{% if disk.low %} low{% endif %}"><span style="width: {{ disk.pct }}%"></span></div>
+    <div class="meta">사용률 {{ disk.pct }}% · 남은 공간 {{ disk.free }}</div>
+    {% if disk.low %}<p class="warn">⚠ SSD 남은 공간이 {{ disk.warn_pct }}% 이하입니다.</p>{% endif %}
+  </div>
+  {% endif %}
+  <h2>내 파일</h2>
+  {% else %}
+  <p class="where">현재 위치: {{ current }}</p>
+  {% endif %}
+  <div class="tools">
+    <form id="upload" data-max="{{ max_upload }}" data-max-text="{{ max_upload_text }}" data-path="{{ path }}" data-csrf="{{ csrf }}">
+      <label class="btn">⬆ 파일 올리기<input id="upload-input" class="hide" type="file" multiple></label>
+    </form>
+    <a class="btn" href="#newfolder">📁 새 폴더</a>
+  </div>
   <div id="progress" class="progress" hidden>
     <div id="p-name" class="p-name"></div>
     <div id="p-state">업로드 중...</div>
@@ -40,40 +49,72 @@
     <button class="btn">만들기</button>
     <a class="btn gray" href="#">취소</a>
   </form>
-  {% if parent is not none %}
-  <p><a class="btn" href="/files?path={{ parent|urlencode }}">← 상위 폴더</a></p>
-  {% endif %}
-  <ul class="list">
+  <div class="controls">
+    {% if parent is not none %}<a class="small" href="/files?path={{ parent|urlencode }}">← 상위 폴더</a>{% endif %}
+    <form method="get" action="/files">
+      <input type="hidden" name="path" value="{{ path }}">
+      <select name="sort" aria-label="정렬" onchange="this.form.submit()">
+        {% for k, label in sorts.items() %}<option value="{{ k }}"{% if k == sort %} selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+      <noscript><button>정렬</button></noscript>
+    </form>
+    {% if view == "grid" %}<a class="small" href="/files?path={{ path|urlencode }}&view=list">☰ 목록</a>
+    {% else %}<a class="small" href="/files?path={{ path|urlencode }}&view=grid">▦ 사진 보기</a>{% endif %}
+    {% if entries %}<button id="select-all" class="small" type="button">☑ 전체 선택</button>{% endif %}
+  </div>
+  <ul class="{{ 'grid' if view == 'grid' else 'list' }}">
     {% for e in entries %}
-    {% set q = e.path|urlencode %}
-    {% if e.kind == "dir" %}{% set icon, open, label = "📁", "/files?path=" ~ q, "열기" %}
-    {% elif e.kind == "image" %}{% set icon, open, label = "🖼", "/view?path=" ~ q, "보기" %}
-    {% elif e.kind == "video" %}{% set icon, open, label = "🎬", "/view?path=" ~ q, "보기" %}
-    {% else %}{% set icon, open, label = "📄", "/download?path=" ~ q, "다운로드" %}{% endif %}
-    <li>
-      <a class="name" href="{{ open }}">{{ icon }} {{ e.name }}</a>
-      <div class="acts">
-        <a href="{{ open }}">{{ label }}</a>
-        <a href="/rename?path={{ q }}">이름 변경</a>
-        <a href="/move?path={{ q }}">이동</a>
-        <form method="post" action="/delete" onsubmit="return confirm('휴지통으로 옮길까요?\n(휴지통에서 복원할 수 있습니다)')">
-          <input type="hidden" name="csrf" value="{{ csrf }}">
-          <input type="hidden" name="path" value="{{ e.path }}">
-          <button>삭제</button>
-        </form>
-      </div>
+    {% if view == "grid" %}
+    <li class="tile">
+      <input class="sel" type="checkbox" name="paths" value="{{ e.path }}" form="bulk" aria-label="{{ e.name }} 선택">
+      {{ m.thumb(e) }}
+      <a class="name" href="{{ m.open_url(e) }}">{{ e.name }}</a>
     </li>
+    {% else %}
+    <li class="row">
+      <input class="sel" type="checkbox" name="paths" value="{{ e.path }}" form="bulk" aria-label="{{ e.name }} 선택">
+      {{ m.thumb(e) }}
+      <div class="body">
+        <a class="name" href="{{ m.open_url(e) }}">{{ e.name }}</a>
+        <div class="meta">{% if not e.is_dir %}{{ e.size|size }} · {% endif %}{{ e.mtime|date }}</div>
+        <div class="acts">
+          <a href="{{ m.open_url(e) }}">{{ "열기" if e.kind == "dir" else "보기" if e.kind in ("image", "video") else "다운로드" }}</a>
+          <a href="/info?path={{ e.path|urlencode }}">정보</a>
+          <a href="/rename?path={{ e.path|urlencode }}">이름 변경</a>
+          <a href="/move?path={{ e.path|urlencode }}">이동</a>
+          <form method="post" action="/delete" onsubmit="return confirm('휴지통으로 옮길까요?\n(휴지통에서 복원할 수 있습니다)')">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <input type="hidden" name="path" value="{{ e.path }}">
+            <button>삭제</button>
+          </form>
+        </div>
+      </div>
+      {{ m.star(e, favorites, csrf, here) }}
+    </li>
+    {% endif %}
     {% else %}
     <li class="empty">비어 있는 폴더입니다.</li>
     {% endfor %}
   </ul>
+  <form id="bulk" method="post" action="/bulk">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="path" value="{{ path }}">
+    <div id="bulkbar" class="bulkbar" hidden>
+      <span id="sel-count"></span>
+      <button class="btn" name="action" value="move">이동</button>
+      <button id="bulk-trash" class="btn danger" name="action" value="trash">휴지통</button>
+      <button id="sel-clear" class="btn gray" type="button">해제</button>
+    </div>
+  </form>
   {% endif %}
-</main>
+{% endblock %}
+{% block navupload %}{% if not error %}<label for="upload-input">⬆<span>올리기</span></label>{% endif %}{% endblock %}
+{% block script %}
 <script>
 (function () {
   var form = document.getElementById("upload");
   if (!form) return;
-  var input = form.querySelector("input[type=file]");
+  var input = document.getElementById("upload-input");
   var $ = function (id) { return document.getElementById(id); };
   var mb = function (n) { return n >= 1073741824 ? (n / 1073741824).toFixed(2) + "GB" : (n / 1048576).toFixed(1) + "MB"; };
   var xhr = null, busy = false;
@@ -132,5 +173,25 @@
   };
 })();
 </script>
-</body>
-</html>
+<script>
+(function () {
+  var boxes = Array.prototype.slice.call(document.querySelectorAll("input.sel"));
+  var bar = document.getElementById("bulkbar");
+  if (!bar) return;
+  var count = function () { return boxes.filter(function (b) { return b.checked; }).length; };
+  var refresh = function () { var n = count(); bar.hidden = n === 0; document.getElementById("sel-count").textContent = n + "개 선택"; };
+  boxes.forEach(function (b) { b.onchange = refresh; });
+  var all = document.getElementById("select-all");
+  if (all) all.onclick = function () {
+    var every = boxes.length && boxes.every(function (b) { return b.checked; });
+    boxes.forEach(function (b) { b.checked = !every; });
+    refresh();
+  };
+  document.getElementById("sel-clear").onclick = function () { boxes.forEach(function (b) { b.checked = false; }); refresh(); };
+  document.getElementById("bulk-trash").onclick = function () {
+    return confirm("선택한 " + count() + "개 항목을 휴지통으로 이동하시겠습니까?\n(휴지통에서 복원할 수 있습니다)");
+  };
+  refresh();
+})();
+</script>
+{% endblock %}

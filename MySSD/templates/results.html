@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% set here = request.url.path ~ ("?" ~ request.url.query if request.url.query else "") %}
+{% block title %}내 SSD - {{ title }}{% endblock %}
+{% block main %}
+  <h2>{{ title }}</h2>
+  {% if q is defined and not q %}<p class="note">위 검색창에 파일이나 폴더 이름의 일부를 입력하세요.</p>{% endif %}
+  {% if partial %}<p class="warn">⚠ 항목이 많아 일부만 표시했습니다. 검색어를 더 구체적으로 입력하세요.</p>{% endif %}
+  {% if grid %}
+  <ul class="grid">
+    {% for e in entries %}
+    <li class="tile">
+      {{ m.thumb(e) }}
+      <a class="name" href="{{ m.open_url(e) }}">{{ e.name }}</a>
+      <a class="loc" href="/files?path={{ e.parent|urlencode }}">{{ m.location(e) }}</a>
+    </li>
+    {% else %}
+    <li class="empty">표시할 항목이 없습니다.</li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <ul class="list">
+    {% for e in entries %}
+    {% if grouped and (loop.first or e.group != loop.previtem.group) %}<li class="group">{{ e.group }}</li>{% endif %}
+    <li class="row">
+      {{ m.thumb(e) }}
+      <div class="body">
+        {% if e.missing %}<span class="name">{{ e.name }}</span>
+        {% else %}<a class="name" href="{{ m.open_url(e) }}">{{ e.name }}</a>{% endif %}
+        <div class="meta">
+          {% if show_location %}<a href="/files?path={{ e.parent|urlencode }}">{{ m.location(e) }}</a>{% endif %}
+          {% if e.missing %} · 원본을 찾을 수 없습니다 (이동 또는 삭제됨)
+          {% else %}{% if not e.is_dir %} · {{ e.size|size }}{% endif %} · {{ e.mtime|date }}{% endif %}
+        </div>
+        <div class="acts">
+          {% if not e.missing %}<a href="{{ m.open_url(e) }}">{{ "열기" if e.kind == "dir" else "보기" if e.kind in ("image", "video") else "다운로드" }}</a>
+          <a href="/info?path={{ e.path|urlencode }}">정보</a>{% endif %}
+        </div>
+      </div>
+      {{ m.star(e, favorites, csrf, here) }}
+    </li>
+    {% else %}
+    <li class="empty">{{ "검색 결과가 없습니다." if q else "표시할 항목이 없습니다." }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+{% endblock %}

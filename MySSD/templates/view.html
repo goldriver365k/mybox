@@ -1,26 +1,45 @@
-<!doctype html>
-<html lang="ko">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>내 SSD - {{ name }}</title>
-<link rel="stylesheet" href="/static/style.css">
-</head>
-<body>
-<main>
-  <h1><a href="/files">내 SSD</a></h1>
+{% extends "base.html" %}
+{% block title %}내 SSD - {{ name }}{% endblock %}
+{% block main %}
   <p class="where">{{ name }}</p>
-  <p>
+  <div class="viewbar">
+    {% if kind == "image" %}
+    {% if prev is not none %}<a id="prev" class="btn" href="/view?path={{ prev|urlencode }}">← 이전</a>{% else %}<span class="btn off">← 이전</span>{% endif %}
+    {% if next is not none %}<a id="next" class="btn" href="/view?path={{ next|urlencode }}">다음 →</a>{% else %}<span class="btn off">다음 →</span>{% endif %}
+    {% endif %}
     <a class="btn" href="/download?path={{ path|urlencode }}">다운로드</a>
-    <a class="btn gray" href="/files?path={{ parent|urlencode }}">뒤로가기</a>
-  </p>
-  <div class="preview">
+    <form method="post" action="/favorite">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="path" value="{{ path }}">
+      <input type="hidden" name="next" value="/view?path={{ path|urlencode }}">
+      <button class="btn{% if favorite %} fav{% endif %}">{{ "★ 즐겨찾기" if favorite else "☆ 즐겨찾기" }}</button>
+    </form>
+    <a class="btn gray" href="/info?path={{ path|urlencode }}">정보</a>
+    <a class="btn gray" href="/files?path={{ parent|urlencode }}">닫기</a>
+  </div>
+  <div class="preview" id="preview">
     {% if kind == "image" %}
     <img src="/raw?path={{ path|urlencode }}" alt="{{ name }}">
     {% else %}
     <video src="/raw?path={{ path|urlencode }}" controls playsinline preload="metadata">이 브라우저는 동영상 재생을 지원하지 않습니다.</video>
     {% endif %}
   </div>
-</main>
-</body>
-</html>
+{% endblock %}
+{% block script %}
+{% if kind == "image" %}
+<script>
+(function () {
+  var go = function (id) { var a = document.getElementById(id); if (a) location.href = a.href; };
+  document.addEventListener("keydown", function (e) { if (e.key === "ArrowLeft") go("prev"); if (e.key === "ArrowRight") go("next"); });
+  var x = null, y = null, box = document.getElementById("preview");
+  box.addEventListener("touchstart", function (e) { if (e.touches.length === 1) { x = e.touches[0].clientX; y = e.touches[0].clientY; } }, { passive: true });
+  box.addEventListener("touchend", function (e) {
+    if (x === null) return;
+    var dx = e.changedTouches[0].clientX - x, dy = e.changedTouches[0].clientY - y;
+    x = null;
+    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) go(dx > 0 ? "prev" : "next");
+  });
+})();
+</script>
+{% endif %}
+{% endblock %}

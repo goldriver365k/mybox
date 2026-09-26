@@ -5,7 +5,11 @@ __pycache__/
 *.log.*
 logs/
 *.part
+# MySSD 관리 폴더 (SSD 안에 생김 — 저장소에 들어오면 안 됨)
 .myssd_temp/
 .myssd_trash/
+.myssd_meta/
+.myssd_cache/
+favorites.json
 .venv/
 venv/

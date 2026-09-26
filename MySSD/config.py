@@ -27,6 +27,21 @@ LOGIN_LOCK_SECONDS = 300
 
 SESSION_HOURS = 12
 
+# 최근 파일 화면에 보여줄 개수
+RECENT_FILES_LIMIT = 50
+# 검색 결과 / 사진·동영상 모아보기 최대 표시 개수
+SEARCH_RESULTS_LIMIT = 200
+MEDIA_LIST_LIMIT = 300
+# 전체 검색·최근 파일·사진/동영상 모아보기가 SSD를 훑는 최대 시간(초). 넘으면 찾은 데까지만 표시
+SCAN_TIME_LIMIT = 15
+
+# SSD 남은 공간이 이 비율(%) 이하이면 홈 화면에 경고 (자동 삭제는 하지 않음)
+LOW_DISK_WARNING_PERCENT = 10
+
+# 사진 썸네일 크기(px)와 썸네일 캐시 최대 크기(SSD_ROOT/.myssd_cache/thumbnails)
+THUMB_SIZE = 256
+THUMB_CACHE_MAX_MB = 500
+
 # 계정 정보는 .env 파일(또는 환경변수)에서 읽습니다. 만들기: python config.py
 ENV_FILE = Path(__file__).parent / ".env"
 PBKDF2_ITERATIONS = 600_000

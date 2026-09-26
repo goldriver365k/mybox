@@ -1,14 +1,6 @@
-<!doctype html>
-<html lang="ko">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>내 SSD</title>
-<link rel="stylesheet" href="/static/style.css">
-</head>
-<body>
-<main>
-  <h1><a href="/files">내 SSD</a></h1>
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block main %}
   {% set icon = {"dir": "📁", "image": "🖼", "video": "🎬"}.get(item.kind, "📄") %}
   {% if mode == "rename" %}
   <h2>이름 변경</h2>
@@ -23,14 +15,19 @@
 
   {% elif mode == "move" %}
   <h2>이동</h2>
+  {% if items|length > 1 %}
+  <p class="where">이동할 항목 {{ items|length }}개:</p>
+  <ul class="picked">{% for i in items %}<li>{{ m.icon(i) }} /{{ i.path }}</li>{% endfor %}</ul>
+  {% else %}
   <p class="where">이동할 항목: {{ icon }} /{{ item.path }}</p>
+  {% endif %}
   <p class="where">옮길 폴더: <b>/{{ dest }}</b></p>
   {% if dest_parent is not none %}
-  <p><a class="btn" href="/move?path={{ item.path|urlencode }}&dest={{ dest_parent|urlencode }}">← 상위 폴더</a></p>
+  <p><a class="btn" href="/move?{{ 'sel=' ~ sel if sel else 'path=' ~ item.path|urlencode }}&dest={{ dest_parent|urlencode }}">← 상위 폴더</a></p>
   {% endif %}
   <ul class="list">
     {% for d in folders %}
-    <li><a class="name" href="/move?path={{ item.path|urlencode }}&dest={{ d.path|urlencode }}">📁 {{ d.name }}</a></li>
+    <li><a class="name" href="/move?{{ 'sel=' ~ sel if sel else 'path=' ~ item.path|urlencode }}&dest={{ d.path|urlencode }}">📁 {{ d.name }}</a></li>
     {% else %}
     <li class="empty">하위 폴더가 없습니다.</li>
     {% endfor %}
@@ -39,9 +36,29 @@
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <input type="hidden" name="path" value="{{ item.path }}">
     <input type="hidden" name="dest" value="{{ dest }}">
+    <input type="hidden" name="sel" value="{{ sel }}">
     <button class="btn">여기(/{{ dest }})로 이동</button>
     <a class="btn gray" href="/files?path={{ item.parent|urlencode }}">취소</a>
   </form>
+  <p class="note">같은 이름이 이미 있는 항목은 덮어쓰지 않고 옮기지 않습니다 (결과에 표시).</p>
+
+  {% elif mode == "info" %}
+  <h2>파일 정보</h2>
+  <table class="info">
+    <tr><th>이름</th><td>{{ icon }} {{ item.name }}</td></tr>
+    <tr><th>종류</th><td>{{ "폴더" if item.is_dir else {"image": "사진", "video": "동영상"}.get(item.kind, "파일") }}{% if item.ext and not item.is_dir %} ({{ item.ext|upper }}){% endif %}</td></tr>
+    {% if item.is_dir %}{% if item.children is defined %}<tr><th>안의 항목</th><td>{{ item.children }}개</td></tr>{% endif %}
+    {% else %}<tr><th>크기</th><td>{{ item.size|size }} ({{ "{:,}".format(item.size) }} 바이트)</td></tr>{% endif %}
+    {% if item.dims %}<tr><th>가로 × 세로</th><td>{{ item.dims }}</td></tr>{% endif %}
+    <tr><th>수정 날짜</th><td>{{ item.mtime|date }}</td></tr>
+    <tr><th>저장 위치</th><td><a href="/files?path={{ item.parent|urlencode }}">/{{ item.parent }}{% if item.parent %}/{% endif %}</a></td></tr>
+  </table>
+  <div class="acts big">
+    <a href="{{ m.open_url(item) }}">{{ "열기" if item.is_dir else "보기" if item.kind in ("image", "video") else "다운로드" }}</a>
+    <a href="/rename?path={{ item.path|urlencode }}">이름 변경</a>
+    <a href="/move?path={{ item.path|urlencode }}">이동</a>
+  </div>
+  {{ m.star(item, [item.path] if favorite else [], csrf, "/info?path=" ~ item.path|urlencode) }}
 
   {% elif mode == "purge" %}
   <h2>영구 삭제</h2>
@@ -55,6 +72,4 @@
     <a class="btn gray" href="/trash">취소</a>
   </form>
   {% endif %}
-</main>
-</body>
-</html>
+{% endblock %}

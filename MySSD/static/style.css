@@ -51,3 +51,75 @@ h2 { font-size: 1.2rem; }
 .box label.check { flex-direction: row; align-items: center; }
 .note { color: #888; font-size: 0.85rem; }
 .list a.name:only-child { padding-bottom: 12px; }
+/* 5단계: 공통 헤더·하단 메뉴 */
+body { padding-bottom: 72px; }
+main { overflow-wrap: anywhere; }
+.top { position: sticky; top: 0; z-index: 5; display: flex; gap: 8px; align-items: center; padding: 8px 16px; background: #fff; border-bottom: 1px solid #ddd; }
+.top .brand { font-weight: bold; font-size: 1.1rem; color: #222; text-decoration: none; white-space: nowrap; }
+.top .search { flex: 1; min-width: 0; margin: 0; }
+.top .search input { width: 100%; min-height: 40px; }
+.top form { margin: 0; }
+.logout { min-height: 40px; padding: 8px 10px; border: 0; border-radius: 6px; background: #eee; color: #444; font-size: 0.85rem; cursor: pointer; white-space: nowrap; }
+nav.bottom { position: fixed; bottom: 0; left: 0; right: 0; z-index: 5; display: flex; background: #fff; border-top: 1px solid #ddd; padding-bottom: env(safe-area-inset-bottom); }
+nav.bottom a, nav.bottom label { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 56px; font-size: 1.2rem; color: #333; text-decoration: none; cursor: pointer; }
+nav.bottom span { font-size: 0.75rem; }
+nav.bottom label { color: #fff; background: #2563eb; }
+.quick { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; margin: 8px 0 12px; }
+.quick a { display: flex; align-items: center; min-height: 52px; padding: 8px 12px; background: #fff; border: 1px solid #ddd; border-radius: 8px; color: #222; text-decoration: none; }
+.card { padding: 12px; margin-bottom: 12px; background: #fff; border: 1px solid #ddd; border-radius: 8px; }
+.bar { height: 14px; margin: 6px 0; background: #e5e7eb; border-radius: 7px; overflow: hidden; }
+.bar span { display: block; height: 100%; background: #2563eb; }
+.bar.low span { background: #c00; }
+.warn { padding: 8px 12px; background: #fff7e6; border: 1px solid #f5c26b; border-radius: 6px; color: #8a5300; }
+.tools { grid-template-columns: repeat(2, 1fr) !important; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+.controls form { margin: 0; }
+.controls select, .small { min-height: 40px; padding: 8px 10px; font-size: 0.9rem; border: 1px solid #ccc; border-radius: 6px; background: #fff; color: #222; text-decoration: none; cursor: pointer; }
+/* 목록 행: 체크박스 · 썸네일 · 이름/정보/버튼 · 별 */
+.list li.row { display: flex; align-items: flex-start; gap: 8px; padding: 8px; }
+.list li.group { padding: 8px 12px; background: #f0f0f0; font-weight: bold; font-size: 0.9rem; }
+.row .body { flex: 1; min-width: 0; }
+.row .name, .list .row a.name { display: block; padding: 4px 0; min-height: 0; font-weight: 500; }
+.row .meta { padding: 0; }
+.row .meta a { display: inline; padding: 0; min-height: 0; color: #2563eb; }
+.row .acts { padding: 6px 0 0; }
+input.sel { width: 24px; height: 24px; margin: 18px 0 0; flex: none; }
+.thumb { flex: none; display: flex; align-items: center; justify-content: center; width: 56px; height: 56px; font-size: 1.8rem; background: #f3f4f6; border-radius: 6px; overflow: hidden; text-decoration: none; }
+.list a.thumb { padding: 0; min-height: 0; }
+.thumb img { width: 100%; height: 100%; object-fit: cover; }
+.star { margin: 0; }
+.star button { min-width: 44px; min-height: 44px; border: 0; background: none; font-size: 1.4rem; color: #999; cursor: pointer; }
+.star button.on { color: #e6a700; }
+/* 사진 보기(그리드) */
+.grid { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; }
+.grid .tile { position: relative; padding: 6px; background: #fff; border: 1px solid #ddd; border-radius: 6px; }
+.grid .thumb { width: 100%; height: auto; aspect-ratio: 1; font-size: 2.5rem; }
+.grid .name { display: block; margin-top: 4px; font-size: 0.8rem; color: #222; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.grid .loc { display: block; font-size: 0.7rem; color: #888; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.grid input.sel { position: absolute; top: 8px; left: 8px; margin: 0; z-index: 1; }
+.grid .empty { grid-column: 1 / -1; }
+.bulkbar { position: fixed; left: 0; right: 0; bottom: 56px; z-index: 6; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 16px; background: #1f2937; color: #fff; padding-bottom: calc(8px + env(safe-area-inset-bottom)); }
+.bulkbar span { flex: 1; }
+.bulkbar .btn { padding: 8px 14px; }
+/* 사진 보기 화면 */
+.viewbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.viewbar form { margin: 0; }
+.btn.off { background: #ccc; color: #fff; }
+.btn.fav { background: #e6a700; }
+.preview { touch-action: pan-y; }
+.info { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #ddd; border-radius: 6px; }
+.info th, .info td { padding: 10px; border-bottom: 1px solid #eee; text-align: left; vertical-align: top; word-break: break-all; }
+.info th { width: 7em; color: #666; font-weight: normal; white-space: nowrap; }
+.acts.big { padding: 12px 0; }
+.picked { margin: 0 0 12px; padding-left: 20px; color: #555; word-break: break-all; }
+@media (min-width: 700px) { .tools { grid-template-columns: repeat(4, 1fr) !important; } }
+/* 목록 행: 1줄 = 체크·썸네일·이름·별, 2줄 = 날짜, 3줄 = 버튼 (폭 전체 사용) */
+.list li.row { display: grid; grid-template-columns: auto 48px minmax(0, 1fr) auto; column-gap: 8px; align-items: center; }
+.row .body { display: contents; }
+.row > input.sel { grid-column: 1; grid-row: 1 / 3; margin: 0; }
+.row > .thumb { grid-column: 2; grid-row: 1 / 3; width: 48px; height: 48px; font-size: 1.5rem; }
+.row .name { grid-column: 3; grid-row: 1; }
+.row .meta { grid-column: 3; grid-row: 2; font-size: 0.8rem; }
+.row > .star { grid-column: 4; grid-row: 1 / 3; }
+.row .acts { grid-column: 1 / -1; grid-row: 3; gap: 4px; padding: 6px 0 0; }
+.row .acts a, .row .acts button { min-height: 36px; padding: 6px 10px; font-size: 0.85rem; }
