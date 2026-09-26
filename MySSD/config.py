@@ -25,6 +25,8 @@ ALLOWED_NETWORKS = ["127.0.0.0/8", "::1/128", "100.64.0.0/10", "fd7a:115c:a1e0::
 
 # 한 번에 올릴 수 있는 최대 크기 (기본 20GB). 예: 5GB = 5 * 1024**3
 MAX_UPLOAD_SIZE = 20 * 1024**3
+# 업로드 중 이 시간(초) 동안 데이터가 전혀 오지 않으면 끊긴 것으로 보고 중단 (임시 파일 삭제)
+UPLOAD_IDLE_SECONDS = 120
 
 # 로그인 연속 실패 LOGIN_MAX_FAILS 회 → LOGIN_LOCK_SECONDS 초 동안 로그인 차단 (접속 기기별)
 LOGIN_MAX_FAILS = 5

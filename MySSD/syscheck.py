@@ -58,10 +58,12 @@ def tailscale(port):
 
 
 def autostart():
-    """자동 실행 바로가기가 있는지 (Windows 에서만 확인 가능, 그 외 None)"""
+    """자동 실행 설정: "작업 스케줄러" / "시작프로그램" / False(설정 안 됨) / None(확인 불가, Windows 아님)"""
     if os.name != "nt" or not os.environ.get("APPDATA"):
         return None
-    return STARTUP_LINK.exists()
+    if _run("schtasks", "/Query", "/TN", "MySSD") is not None:
+        return "작업 스케줄러"
+    return "시작프로그램" if STARTUP_LINK.exists() else False
 
 
 def https_probe(url):

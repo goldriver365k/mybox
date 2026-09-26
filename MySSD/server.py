@@ -19,17 +19,28 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
-import uvicorn
-from fastapi import APIRouter, Depends, FastAPI, Form, Request
-from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
-from starlette.concurrency import run_in_threadpool
-from starlette.exceptions import HTTPException
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.middleware.sessions import SessionMiddleware
-from starlette.requests import ClientDisconnect
+if sys.version_info < (3, 10):
+    sys.exit("Python 3.10 이상이 필요합니다. https://www.python.org/downloads/ 에서 새 버전을 설치하세요.")
+try:
+    import asyncio
+    import socket
+
+    import itsdangerous  # noqa: F401  (로그인 쿠키 서명 — SessionMiddleware 가 사용)
+    import jinja2  # noqa: F401
+    import multipart  # noqa: F401  (python-multipart — 폼 입력)
+    import uvicorn
+    from fastapi import APIRouter, Depends, FastAPI, Form, Request
+    from fastapi.exceptions import RequestValidationError
+    from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
+    from fastapi.staticfiles import StaticFiles
+    from fastapi.templating import Jinja2Templates
+    from starlette.concurrency import run_in_threadpool
+    from starlette.exceptions import HTTPException
+    from starlette.middleware.base import BaseHTTPMiddleware
+    from starlette.middleware.sessions import SessionMiddleware
+    from starlette.requests import ClientDisconnect
+except ImportError as e:
+    sys.exit(f"필수 패키지가 설치되지 않았습니다 ({e.name}). MySSD 폴더에서 다음을 실행하세요:  pip install -r requirements.txt")
 
 import analysis
 import config
@@ -104,8 +115,9 @@ class UserError(Exception):
 
 
 class SSDMissing(UserError):
-    def __init__(self, detail=""):
-        super().__init__("외장 SSD 연결이 끊어졌습니다. SSD를 다시 연결하십시오." + (f" ({detail})" if detail else ""), 503)
+    def __init__(self, detail="", lost=True):
+        msg = "외장 SSD 연결이 끊어졌습니다. SSD를 다시 연결하십시오." if lost else "외장 SSD를 찾을 수 없습니다. SSD를 연결하십시오."
+        super().__init__(msg + (f" ({detail})" if detail else ""), 503)
 
 
 class MassConfirm(Exception):
@@ -124,15 +136,18 @@ def get_root():
             if STATE["ssd_ok"] is False:
                 log.info("ssd_reconnected root=%s", root)
             STATE["ssd_ok"] = True
+            STATE["ssd_seen"] = True
             return root.resolve()
     except LookupError as e:
         detail = str(e)
     except OSError:
         pass
-    if STATE["ssd_ok"] is not False:  # 연결 → 끊김으로 바뀐 순간만 기록
-        record_error("SSD 연결 끊김", detail or f"{config.SSD_ROOT} 을(를) 찾을 수 없음")
+    was = STATE["ssd_ok"]
+    if was is not False:  # 연결 → 끊김으로 바뀐 순간만 기록
+        record_error("SSD 연결 끊김" if was else "SSD 없음 (서버 시작 후 아직 연결 안 됨)", detail or f"{config.SSD_ROOT} 을(를) 찾을 수 없음")
     STATE["ssd_ok"] = False
-    raise SSDMissing(detail)
+    STATE.setdefault("ssd_seen", False)
+    raise SSDMissing(detail, lost=STATE.get("ssd_seen", False))
 
 
 def is_inside(root, path):
@@ -323,11 +338,12 @@ def fs_errors(action):
         yield
     except FileExistsError:
         raise UserError("같은 이름의 파일이나 폴더가 이미 있습니다. 기존 파일은 덮어쓰지 않습니다.", 409)
-    except FileNotFoundError:
-        raise UserError("파일이나 폴더를 찾을 수 없습니다. 삭제되었거나 이름이 바뀌었을 수 있습니다.", 404)
-    except PermissionError:
-        raise UserError(f"{action}할 수 없습니다. 파일이 사용 중(다운로드·재생 중)이거나 권한이 없습니다.", 403)
-    except OSError:
+    except OSError as e:
+        get_root()  # 작업 중 SSD가 빠졌다면 여기서 "외장 SSD 연결이 끊어졌습니다" (SSDMissing)
+        if isinstance(e, FileNotFoundError):
+            raise UserError("파일이나 폴더를 찾을 수 없습니다. 삭제되었거나 이름이 바뀌었을 수 있습니다.", 404)
+        if isinstance(e, PermissionError):
+            raise UserError(f"{action}할 수 없습니다. 파일이 사용 중(다운로드·재생 중)이거나 권한이 없습니다.", 403)
         raise UserError(f"{action} 중 오류가 발생했습니다. SSD 연결 상태와 남은 공간을 확인하세요.", 503)
 
 
@@ -742,6 +758,7 @@ def files(request: Request, path: str = "", sort: str = "", view: str = "", limi
     except PermissionError:
         raise UserError("이 폴더에 접근할 권한이 없습니다.", 403)
     except OSError:
+        get_root()
         raise UserError("폴더를 읽을 수 없습니다. SSD 연결 상태를 확인하세요.", 503)
     rel = "" if folder == root else folder.relative_to(root).as_posix()
     parent = None if not rel else rel.rpartition("/")[0]
@@ -986,7 +1003,15 @@ async def upload(request: Request, path: str = "", name: str = ""):
                 ACTIVE_UPLOADS[token] = folder
             out = await run_in_threadpool(open, tmp, "xb")
             buf = bytearray()
-            async for chunk in request.stream():
+            chunks = request.stream().__aiter__()
+            while True:
+                # 네트워크가 조용히 끊겨(예: Tailscale 끊김) 데이터가 오래 안 오면 중단 → 임시 파일 삭제
+                try:
+                    chunk = await asyncio.wait_for(chunks.__anext__(), timeout=config.UPLOAD_IDLE_SECONDS)
+                except StopAsyncIteration:
+                    break
+                except asyncio.TimeoutError:
+                    raise UserError(f"업로드가 {config.UPLOAD_IDLE_SECONDS}초 동안 멈춰 중단했습니다. 연결을 확인한 뒤 다시 시도하세요.", 408)
                 size += len(chunk)
                 if size > config.MAX_UPLOAD_SIZE:
                     raise UserError(f"업로드 최대 크기({format_size(config.MAX_UPLOAD_SIZE)})를 넘었습니다.", 413)
@@ -1030,6 +1055,16 @@ async def upload(request: Request, path: str = "", name: str = ""):
     flash = (flash + ", " if flash.startswith("올린 파일:") else "올린 파일: ") + target.name
     request.session["flash"] = flash if len(flash) < 400 else flash[:400] + "…"
     return JSONResponse({"name": target.name})
+
+
+@private.get("/ssd-status")
+def ssd_status():
+    """SSD 연결 안 됨 화면이 몇 초마다 확인 → 연결되면 자동으로 다시 불러옴"""
+    try:
+        get_root()
+        return JSONResponse({"connected": True})
+    except UserError:
+        return JSONResponse({"connected": False})
 
 
 @private.get("/upload/check")
@@ -1646,7 +1681,7 @@ def check_rows(root):
         add("HTTPS", "확인 필요", "HTTPS 접속을 아직 확인하지 못했습니다",
             "Tailscale 이 켜진 휴대폰에서 https://<장치 이름>.ts.net 으로 접속해 보세요 (README 6-2).")
     auto = syscheck.autostart()
-    add("자동 실행", "PASS" if auto else "확인 필요", "시작프로그램에 MySSD 바로가기 있음" if auto else
+    add("자동 실행", "PASS" if auto else "확인 필요", f"{auto} 방식으로 등록됨" if auto else
         "바로가기 없음" if auto is False else "확인 불가 (Windows 아님)", "" if auto else "autostart_install.bat 실행 (README 7장)")
     return rows
 
@@ -1785,6 +1820,68 @@ app.add_middleware(
 app.add_middleware(SecureCookieOnHttps)
 
 
+def preflight():
+    """시작 전 점검: [(항목, 결과 OK/WARN/FAIL, 설명)]. FAIL 이어도 서버를 켤 수 있으면 계속 진행."""
+    rows = []
+    add = lambda name, result, detail: rows.append((name, result, detail))
+    add("Python", "OK", sys.version.split()[0])
+    add("필수 패키지", "OK", "fastapi, uvicorn, jinja2, itsdangerous, python-multipart")
+    add("사진 썸네일(Pillow)", "OK" if Image is not None else "WARN", "설치됨" if Image is not None else "없음 — 사진은 아이콘으로 표시")
+    add(".env 파일", "OK" if config.ENV_FILE.is_file() else "WARN" if config.ENV["MYSSD_USER"] else "FAIL",
+        str(config.ENV_FILE) if config.ENV_FILE.is_file() else "없음 — python config.py 를 실행하세요")
+    missing = [k for k in ("MYSSD_USER", "MYSSD_PASSWORD_HASH") if not config.ENV[k]]
+    if not SECRET_KEY:
+        missing.append("MYSSD_SECRET_KEY(32자 이상)")
+    add("필수 설정값", "FAIL" if missing else "OK", ("없음: " + ", ".join(missing) + " — 로그인 불가") if missing else "아이디·비밀번호 해시·세션 비밀키")
+    try:
+        root = get_root()
+        add("외장 SSD", "OK", str(root))
+        h = ssd_health(root)
+        add("SSD 읽기/쓰기", "OK" if h["readable"] and h["writable"] else "FAIL",
+            f"읽기 {'가능' if h['readable'] else '불가'}, 쓰기 {'가능' if h['writable'] else '불가'}")
+        bad = [d for d in (TEMP_DIR, TRASH_DIR, META_DIR, CACHE_DIR) if (root / d).exists() and not (root / d).is_dir()]
+        add("관리 폴더", "FAIL" if bad else "OK", ("폴더가 아닌 항목: " + ", ".join(bad)) if bad else "정상")
+    except UserError as e:
+        add("외장 SSD", "WARN", e.message + " 서버는 그대로 시작하며, 연결되면 자동으로 인식합니다.")
+    port = port_state()
+    add(f"포트 {config.PORT}", {"free": "OK", "myssd": "FAIL", "busy": "FAIL"}[port],
+        {"free": "사용 가능", "myssd": "MySSD가 이미 실행 중입니다", "busy": f"{config.PORT} 포트를 다른 프로그램이 사용하고 있습니다"}[port])
+    ts = syscheck.tailscale(config.PORT)
+    if ts["installed"] is False:
+        add("Tailscale", "WARN", "설치되지 않음 — 외부 접속 불가 (이 PC에서는 사용 가능)")
+    elif ts["installed"] is None:
+        add("Tailscale", "WARN", "확인 필요 — tailscale 명령을 찾지 못함")
+    else:
+        add("Tailscale", "OK" if ts["running"] else "WARN", ("연결됨 " + (ts["ip"] or "")) if ts["running"] else "연결 안 됨 — 외부 접속 불가")
+    if ts.get("serve") and ts.get("dns"):
+        add("HTTPS", "OK", f"Serve 설정 확인: https://{ts['dns']} (실제 접속은 서버 시작 후 시스템 상태 → [진단 실행])")
+    else:
+        add("HTTPS", "WARN", "확인 필요 — Tailscale Serve 설정을 확인하지 못함 (README 7장)")
+    return rows
+
+
+def port_state():
+    """free: 사용 가능 / myssd: MySSD 가 이미 실행 중 / busy: 다른 프로그램이 사용 중"""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    if os.name != "nt":
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # Windows 에서는 쓰지 않음 (포트 가로채기 방지)
+    try:
+        sock.bind((config.HOST, config.PORT))
+        return "free"
+    except OSError:
+        pass
+    finally:
+        sock.close()
+    try:
+        import urllib.request
+        with urllib.request.urlopen(f"http://127.0.0.1:{config.PORT}/", timeout=3) as r:
+            if "MySSD" in r.read(5000).decode("utf-8", "replace"):
+                return "myssd"
+    except OSError:
+        pass
+    return "busy"
+
+
 def tailscale_ip():
     exe = shutil.which("tailscale") or r"C:\Program Files\Tailscale\tailscale.exe"
     try:
@@ -1804,13 +1901,27 @@ if __name__ == "__main__":
         except OSError:
             pass
         sys.stdout = sys.stderr = open(console, "a", encoding="utf-8", buffering=1)
+    # 시작 전 점검 (재부팅 직후 SSD·Tailscale 이 늦게 준비되어도 서버는 그대로 시작하고, 준비되면 자동으로 인식한다)
+    print("MySSD 시작 전 점검")
+    checks = preflight()
+    for name, result, detail in checks:
+        print(f"  [{ {'OK': ' OK ', 'WARN': '주의', 'FAIL': '실패'}[result] }] {name}: {detail}")
+        (log.info if result == "OK" else log.warning)("preflight %s %s %s", name, result, detail)
+    if "--check" in sys.argv:
+        sys.exit(1 if any(r == "FAIL" for _, r, _ in checks) else 0)
+    port = port_state()
+    if port != "free":
+        # 다른 포트를 임의로 고르지 않는다 (방화벽·Tailscale Serve 설정과 어긋나지 않도록)
+        msg = ("MySSD가 이미 실행 중입니다. 브라우저에서 http://127.0.0.1:%d 로 접속하세요." % config.PORT if port == "myssd" else
+               "%d 포트를 다른 프로그램이 사용하고 있습니다. 그 프로그램을 종료하거나 config.py 의 PORT 를 바꾸세요 "
+               "(PORT 를 바꾸면 tailscale serve 설정도 같은 번호로 다시 해야 합니다)." % config.PORT)
+        print("\n" + msg)
+        log.warning("startup_port %s", msg)
+        if port == "busy":
+            record_error("서버 시작 실패", msg)
+        sys.exit(0 if port == "myssd" else 2)
     log.info("server_start host=%s port=%s ssd_root=%s", config.HOST, config.PORT, config.SSD_ROOT)
-    print("MySSD 서버 시작 (종료: Ctrl+C)")
-    # 재부팅 직후 SSD·Tailscale 이 늦게 준비되어도 서버는 그대로 시작하고, 준비되면 자동으로 인식한다
-    try:
-        print(f"  외장 SSD:       연결됨 ({get_root()})")
-    except UserError:
-        print("  외장 SSD:       아직 연결 안 됨 — 연결되면 새로고침만 하면 됩니다")
+    print("\nMySSD 서버 시작 (종료: Ctrl+C)")
     print(f"  이 PC에서:      http://127.0.0.1:{config.PORT}")
     if config.HOST != "127.0.0.1":
         ts = tailscale_ip()

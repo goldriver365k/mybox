@@ -6,7 +6,18 @@
   {% if error %}
   {% if ssd_down %}<p class="ssd off">● SSD 연결 안 됨</p>{% elif code in (403, 404, 500) %}<p class="errcode">{{ code }}</p>{% endif %}
   <p class="error">{{ error }}</p>
-  <p><a class="btn" href="/files">{{ "다시 확인" if ssd_down else "처음으로" }}</a></p>
+  {% if ssd_down %}<p class="meta" id="ssd-wait">SSD를 연결하면 이 화면이 자동으로 바뀝니다 (5초마다 확인).</p>{% endif %}
+  <p><a class="btn" href="{{ request.url }}">{{ "다시 확인" if ssd_down else "처음으로" }}</a></p>
+  {% if ssd_down %}
+  <script>
+  (function poll() {
+    setTimeout(function () {
+      fetch("/ssd-status", { credentials: "same-origin" }).then(function (r) { return r.json(); })
+        .then(function (d) { if (d.connected) location.reload(); else poll(); }).catch(poll);
+    }, 5000);
+  })();
+  </script>
+  {% endif %}
   {% else %}
   {% if path == "" %}
   {% if disk %}

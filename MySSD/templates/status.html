@@ -19,7 +19,7 @@
       {% else %}{{ tri(ts.running, "연결됨", "연결 안 됨") }}{% endif %}</td></tr>
     <tr><th>HTTPS</th><td>{% if last_https %}{{ dot("ok", "정상") }} <span class="meta">최근 HTTPS 접속 {{ last_https|date }}</span>
       {% else %}{{ dot("unk", "확인 필요") }} <span class="meta">서버 시작 후 HTTPS 접속 기록 없음 — 아래 [진단 실행]</span>{% endif %}</td></tr>
-    <tr><th>자동실행</th><td>{{ tri(autostart, "설정됨", "설정 안 됨") }}</td></tr>
+    <tr><th>자동실행</th><td>{{ tri(autostart, "설정됨" ~ (" (" ~ autostart ~ ")" if autostart is string else ""), "설정 안 됨") }}</td></tr>
     <tr><th>마지막 오류</th><td>{% if errors %}{{ errors[0].time|date }} · {{ errors[0].kind }}{% else %}없음{% endif %}</td></tr>
   </table>
 
