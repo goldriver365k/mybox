@@ -31,8 +31,10 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.requests import ClientDisconnect
 
+import analysis
 import config
 import storage
+import syscheck
 from storage import HIDDEN, MANAGED_PREFIX, is_managed
 
 try:
@@ -70,6 +72,7 @@ SELECTIONS = {}  # 여러 항목 이동용 선택 목록: id -> (만료 시각, 
 EMPTY_TOKENS = {}  # 휴지통 비우기 2단계 확인: token -> (만료 시각, [휴지통 id...])
 MASS_LOG = []  # 최근 파일 변경 작업: (시각, 파일 수) — 짧은 시간 대량 작업 감지용
 HEALTH_CACHE = {}  # SSD 읽기/쓰기 확인 결과 (60초)
+STATE = {"ssd_ok": None, "last_https": None, "started": time.time(), "diagnosis": None}  # 시스템 상태 화면용
 TEMP_PART = re.compile(r"^[0-9a-f]{16}\.part$")  # 업로드 임시 파일 이름 (이 모양만 정리 대상)
 THUMB_COUNT = [0]
 
@@ -112,16 +115,22 @@ class MassConfirm(Exception):
 
 def get_root():
     """외장 SSD 루트. SSD_VOLUME_LABEL 이 있으면 볼륨 이름으로 확인 (확실하지 않으면 다른 디스크를 쓰지 않고 오류)."""
+    detail = ""
     try:
         root = storage.locate(config.SSD_ROOT, config.SSD_VOLUME_LABEL)
-    except LookupError as e:
-        raise SSDMissing(str(e))
-    try:
         if root.is_dir():
+            if STATE["ssd_ok"] is False:
+                log.info("ssd_reconnected root=%s", root)
+            STATE["ssd_ok"] = True
             return root.resolve()
+    except LookupError as e:
+        detail = str(e)
     except OSError:
         pass
-    raise SSDMissing()
+    if STATE["ssd_ok"] is not False:  # 연결 → 끊김으로 바뀐 순간만 기록
+        record_error("SSD 연결 끊김", detail or f"{config.SSD_ROOT} 을(를) 찾을 수 없음")
+    STATE["ssd_ok"] = False
+    raise SSDMissing(detail)
 
 
 def is_inside(root, path):
@@ -158,9 +167,14 @@ def list_dir(root, folder):
                 continue
             try:
                 is_dir = e.is_dir()
-                if not is_inside(root, Path(e.path).resolve()):
-                    continue
-                st = e.stat()
+                lst = e.stat(follow_symlinks=False)
+                # 링크·정션만 실제 위치를 확인 (일반 파일마다 resolve 하면 큰 폴더에서 느림)
+                if e.is_symlink() or getattr(lst, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+                    if not is_inside(root, Path(e.path).resolve()):
+                        continue
+                    st = e.stat()
+                else:
+                    st = lst
             except OSError:
                 continue
             rel = Path(e.path).relative_to(root).as_posix()
@@ -437,21 +451,48 @@ def trim_thumb_cache(d):
 
 ACTIVITY_FILE = LOG_DIR / "activity.jsonl"
 ACTIVITY_LOCK = threading.Lock()
+ERROR_FILE = LOG_DIR / "errors.jsonl"
 
 
-def record(action, name, src="", dst="", ok=True, detail=""):
+def append_jsonl(path, entry, keep=3000):
+    with ACTIVITY_LOCK:
+        try:
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            if path.stat().st_size > 2_000_000:  # 너무 커지면 최근 기록만 남김
+                lines = path.read_text(encoding="utf-8").splitlines()[-keep:]
+                path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        except OSError:
+            log.exception("log_write_failed path=%s", path)
+
+
+def read_jsonl(path, limit):
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()[-limit:]
+    except OSError:
+        return []
+    out = []
+    for line in reversed(lines):
+        try:
+            out.append(json.loads(line))
+        except ValueError:
+            continue
+    return out
+
+
+def record_error(kind, detail=""):
+    """시스템 상태 화면의 '최근 오류'. 우리가 만든 설명 문장만 기록 (요청 헤더·쿠키·비밀번호는 기록하지 않음)."""
+    log.warning("error %s %s", kind, detail)
+    append_jsonl(ERROR_FILE, {"time": time.time(), "kind": kind, "detail": str(detail)[:300]})
+
+
+def record(action, name, src="", dst="", ok=True, detail="", system=False):
     """중요 작업 기록 (파일 복사 없이 정보만): 시각, 작업, 파일명, 원래 위치, 새 위치, 성공/실패. 비밀번호 등은 기록하지 않음."""
     entry = {"time": time.time(), "action": action, "name": name, "from": src, "to": dst, "ok": ok, "detail": detail}
     log.info("activity %s", json.dumps(entry, ensure_ascii=False))
-    with ACTIVITY_LOCK:
-        try:
-            with open(ACTIVITY_FILE, "a", encoding="utf-8") as f:
-                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-            if ACTIVITY_FILE.stat().st_size > 2_000_000:  # 너무 커지면 최근 3000건만 남김
-                lines = ACTIVITY_FILE.read_text(encoding="utf-8").splitlines()[-3000:]
-                ACTIVITY_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        except OSError:
-            log.exception("activity_write_failed")
+    append_jsonl(ACTIVITY_FILE, entry)
+    if not ok and system:  # SSD·공간·연결 문제만 '최근 오류'에 (이름 규칙 위반 같은 입력 실수는 작업 기록에만)
+        record_error(f"{action} 실패", f"{name}: {detail}")
 
 
 @contextmanager
@@ -461,7 +502,7 @@ def recorded(action, name, src="", dst=""):
     try:
         yield info
     except UserError as e:
-        record(action, name, src, info["dst"], False, e.message)
+        record(action, name, src, info["dst"], False, e.message, system=e.status >= 500)
         raise
     record(action, name, src, info["dst"], True)
 
@@ -616,6 +657,7 @@ def http_error(request: Request, exc: Exception):
 @app.exception_handler(Exception)
 def server_error(request: Request, exc: Exception):
     log.exception("server_error url=%s", request.url.path)
+    record_error("서버 오류", f"{type(exc).__name__} ({request.url.path})")
     if not is_logged_in(request):
         return RedirectResponse("/", status_code=303)
     if request.url.path == "/upload":
@@ -686,7 +728,7 @@ private = APIRouter(dependencies=[Depends(require_login)])
 
 
 @private.get("/files")
-def files(request: Request, path: str = "", sort: str = "", view: str = ""):
+def files(request: Request, path: str = "", sort: str = "", view: str = "", limit: int = 0):
     if sort in SORTS:
         request.session["sort"] = sort
     if view in ("list", "grid"):
@@ -701,8 +743,10 @@ def files(request: Request, path: str = "", sort: str = "", view: str = ""):
         raise UserError("폴더를 읽을 수 없습니다. SSD 연결 상태를 확인하세요.", 503)
     rel = "" if folder == root else folder.relative_to(root).as_posix()
     parent = None if not rel else rel.rpartition("/")[0]
+    limit = max(limit, config.FOLDER_PAGE_SIZE)  # 항목이 아주 많은 폴더는 나눠서 보여줌 (한 번에 수십 MB 화면 방지)
     return render_files(
-        request, current="/" + rel, parent=parent, entries=entries, path=rel, sort=sort, sorts=SORTS,
+        request, current="/" + rel, parent=parent, entries=entries[:limit], total=len(entries), limit=limit,
+        page_size=config.FOLDER_PAGE_SIZE, path=rel, sort=sort, sorts=SORTS,
         view=request.session.get("view", "list"), favorites=set(load_favorites(root)),
         disk=disk_info(root) if not rel else None,
         health=ssd_health(root) if not rel else None,
@@ -928,7 +972,7 @@ async def upload(request: Request, path: str = "", name: str = ""):
     if free - expected < min_free_bytes():
         msg = (f"SSD 저장공간이 부족하여 업로드할 수 없습니다. (파일 {human_size(expected)}, 남은 공간 {human_size(free)}, "
                f"최소 여유 공간 {config.MIN_FREE_SPACE_GB}GB)")
-        record("업로드", name, "", "/" + to_rel(root, folder), False, msg)
+        record("업로드", name, "", "/" + to_rel(root, folder), False, msg, system=True)
         raise UserError(msg, 507)
     token = secrets.token_hex(8)
     tmp = None
@@ -956,11 +1000,11 @@ async def upload(request: Request, path: str = "", name: str = ""):
             target = await run_in_threadpool(move_unique, root, tmp, folder, name, False)
     except ClientDisconnect:
         audit(request, "upload_cancel", folder="/" + to_rel(root, folder), name=name, received=size)
-        record("업로드", name, "", "/" + to_rel(root, folder), False, "취소되었거나 연결이 끊김")
+        record("업로드", name, "", "/" + to_rel(root, folder), False, "취소되었거나 연결이 끊김", system=True)
         return JSONResponse({"error": "업로드가 취소되었습니다."}, status_code=400)
     except UserError as e:
         audit(request, "upload_fail", folder="/" + to_rel(root, folder), name=name, reason=e.message)
-        record("업로드", name, "", "/" + to_rel(root, folder), False, e.message)
+        record("업로드", name, "", "/" + to_rel(root, folder), False, e.message, system=e.status >= 500)
         raise
     finally:
         if out and not out.closed:
@@ -1184,12 +1228,15 @@ def trash_item(root, src):
     """영구 삭제하지 않고 SSD_ROOT/.myssd_trash 로 옮긴다. 원래 위치는 <id>.json 에 기록."""
     check_not_busy(src)
     tid = time.strftime("%Y%m%d-%H%M%S") + "-" + secrets.token_hex(4)
+    size, files = dir_usage(src)  # 휴지통 용량은 넣을 때 한 번 계산해서 기록 (화면마다 다시 세지 않음)
     meta = {
         "name": src.name,
         "original_path": to_rel(root, src.parent),
         "deleted_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "trash_name": f"{tid}/{src.name}",
         "is_dir": src.is_dir(),
+        "size": size,
+        "files": files,
     }
     drop_thumb(root, src)
     with fs_errors("휴지통으로 이동"):
@@ -1242,7 +1289,7 @@ def trash_page(request: Request, sort: str = "new"):
         except UserError:
             continue
     for m in items:
-        m["size"], m["files"] = dir_usage(m["item"])
+        trash_size(root, m)
     sort = sort if sort in TRASH_SORTS else "new"
     keys = {"new": (lambda m: m.get("deleted_at", ""), True), "old": (lambda m: m.get("deleted_at", ""), False),
             "size": (lambda m: m["size"], True), "name": (lambda m: m["name"].lower(), False)}
@@ -1288,13 +1335,41 @@ def purge_item(root, meta):
         (root / TRASH_DIR / f"{meta['id']}.json").unlink(missing_ok=True)
 
 
-def trash_usage(root):
-    """휴지통에 든 항목들의 실제 용량·파일 수 (기록용 .json 제외)"""
+TRASH_META_KEYS = ("name", "original_path", "deleted_at", "trash_name", "is_dir", "size", "files")
+
+
+def trash_size(root, meta, recount=False):
+    """휴지통 항목의 용량. <id>.json 에 기록된 값을 쓰고, 없거나 recount 면 실제로 세어 기록해 둔다."""
+    if recount or not isinstance(meta.get("size"), int) or not isinstance(meta.get("files"), int):
+        meta["size"], meta["files"] = dir_usage(meta["item"])
+        try:
+            path = root / TRASH_DIR / f"{meta['id']}.json"
+            tmp = path.with_name(path.name + ".tmp")
+            tmp.write_text(json.dumps({k: meta[k] for k in TRASH_META_KEYS if k in meta}, ensure_ascii=False, indent=1), encoding="utf-8")
+            os.replace(tmp, path)
+        except OSError:
+            pass
+    return meta["size"], meta["files"]
+
+
+def trash_usage(root, recount=False):
+    """휴지통 전체 용량·파일 수 = 항목별 기록 값의 합 (복원·영구 삭제하면 그 항목이 빠지므로 자동으로 줄어듦)"""
     size = files = 0
     for tid in trash_ids(root):
-        s, f = dir_usage(root / TRASH_DIR / tid)
+        try:
+            s, f = trash_size(root, read_trash(root, tid), recount)
+        except UserError:
+            continue
         size, files = size + s, files + f
     return size, files
+
+
+@private.post("/trash/recount")
+def trash_recount(request: Request, csrf: str = Form("")):
+    check_csrf(request, csrf)
+    size, files = trash_usage(get_root(), recount=True)
+    request.session["flash"] = f"휴지통 용량을 다시 계산했습니다: {human_size(size)}, 파일 {files:,}개"
+    return RedirectResponse("/trash", status_code=303)
 
 
 def trash_ids(root):
@@ -1445,6 +1520,162 @@ def clean_temp(request: Request, csrf: str = Form(""), confirm: str = Form("")):
     return RedirectResponse("/manage", status_code=303)
 
 
+MANAGED_LABELS = {"휴지통": TRASH_DIR, "썸네일 캐시": CACHE_DIR, "임시 파일": TEMP_DIR}
+
+
+@private.get("/analysis")
+def analysis_page(request: Request):
+    root = get_root()
+    result = analysis.load(root)
+    corrupt = result is None and (root / analysis.CACHE_FILE).exists()
+    biggest = result["folders"][0][1] if result and result["folders"] else 0
+    return page(request, "analysis.html", disk=disk_info(root), result=result, corrupt=corrupt, biggest=biggest,
+                astatus=analysis.status(), trash=trash_usage(root))
+
+
+@private.get("/analysis/status")
+def analysis_status():
+    return JSONResponse(analysis.status())
+
+
+@private.post("/analysis/start")
+def analysis_start(request: Request, csrf: str = Form("")):
+    check_csrf(request, csrf)
+    root = get_root()
+    if not analysis.status().get("running"):
+        threading.Thread(target=analysis.run, args=(root, MANAGED_LABELS, config.LARGE_FILES_LIMIT), daemon=True).start()
+        audit(request, "analysis_start")
+    return RedirectResponse("/analysis", status_code=303)
+
+
+@private.post("/analysis/clear")
+def analysis_clear(request: Request, csrf: str = Form("")):
+    """분석 결과(캐시)만 지움 — 사용자 파일과 무관, 다시 분석하면 새로 만들어짐"""
+    check_csrf(request, csrf)
+    analysis.clear(get_root())
+    request.session["flash"] = "저장된 분석 결과를 지웠습니다. [다시 분석]으로 새로 만들 수 있습니다."
+    return RedirectResponse("/analysis", status_code=303)
+
+
+@private.get("/analysis/large")
+def large_files(request: Request):
+    root = get_root()
+    result = analysis.load(root)
+    entries = []
+    for rel, size, mtime in (result or {}).get("large", []):
+        name = rel.rpartition("/")[2]
+        e = {"name": name, "path": rel, "parent": rel.rpartition("/")[0], "size": size, "mtime": mtime, "is_dir": False,
+             "kind": file_kind(name)}
+        try:
+            safe_path(rel)[1].stat()
+        except (UserError, OSError):
+            e["missing"] = True
+        entries.append(e)
+    return page(request, "analysis.html", mode="large", entries=entries, result=result)
+
+
+def check_rows(root):
+    """진단 항목: (이름, 결과 PASS/FAIL/확인 필요, 설명, 안내). 아무것도 고치지 않고 확인만 한다."""
+    rows = []
+    add = lambda name, result, detail, guide="": rows.append({"name": name, "result": result, "detail": detail, "guide": guide})
+    HEALTH_CACHE.clear()
+    h = ssd_health(root)
+    add("SSD 연결", "PASS", str(root))
+    add("SSD 읽기", "PASS" if h["readable"] else "FAIL", "폴더 목록 읽기", "SSD를 다시 연결하거나 탐색기에서 열리는지 확인하세요.")
+    add("SSD 쓰기", "PASS" if h["writable"] else "FAIL", ".myssd_temp 에 작은 시험 파일을 만들고 바로 삭제",
+        "SSD가 읽기 전용이거나 권한이 없습니다. Windows 탐색기에서 SSD에 파일을 만들 수 있는지 확인하세요.")
+    d = disk_info(root)
+    if d:
+        add("남은 공간", {"ok": "PASS", "low": "확인 필요", "critical": "FAIL"}[d["level"]], f"{d['free']} 남음 ({100 - d['pct']}%)",
+            "휴지통(큰 파일순)과 저장공간 분석의 큰 파일 목록에서 정리할 파일을 찾아보세요." if d["level"] != "ok" else "")
+    if config.SSD_VOLUME_LABEL:
+        label = h.get("label")
+        add("볼륨 이름", "PASS" if label == config.SSD_VOLUME_LABEL else "확인 필요",
+            f"설정 {config.SSD_VOLUME_LABEL} / 현재 {label or '확인 불가 (Windows 아님)'}")
+    else:
+        add("볼륨 이름", "확인 필요", "설정 안 됨", "README 의 'SSD 볼륨 이름 지정'을 따르면 드라이브 문자가 바뀌어도 SSD를 찾을 수 있습니다.")
+    bad = [n for n, dname in MANAGED_LABELS.items() if (root / dname).exists() and not (root / dname).is_dir()]
+    broken = [tid for tid in trash_ids(root) if not (root / TRASH_DIR / tid).is_dir()]
+    add("관리 폴더", "FAIL" if bad else "확인 필요" if broken else "PASS",
+        f"폴더가 아닌 항목: {', '.join(bad)}" if bad else f"내용이 없는 휴지통 기록 {len(broken)}개" if broken else "정상",
+        "탐색기에서 .myssd_ 로 시작하는 폴더를 직접 지우거나 바꾸지 마세요." if bad or broken else "")
+    ts = syscheck.tailscale(config.PORT)
+    if ts["installed"] is False:
+        add("Tailscale", "FAIL", "설치되지 않음", "https://tailscale.com/download 에서 설치하세요 (README 5장).")
+    elif ts["installed"] is None:
+        add("Tailscale", "확인 필요", "tailscale 명령을 찾을 수 없음 (Windows 가 아니거나 PATH 에 없음)")
+    else:
+        add("Tailscale", "PASS" if ts["running"] else "확인 필요" if ts["running"] is None else "FAIL",
+            f"상태 {ts['backend'] or '확인 불가'}" + (f", IP {ts['ip']}" if ts["ip"] else "") + (f", 이름 {ts['dns']}" if ts["dns"] else ""),
+            "" if ts["running"] else "작업 표시줄 Tailscale 아이콘에서 로그인·연결 상태를 확인하세요.")
+        add("Tailscale Serve", "PASS" if ts["serve"] else "확인 필요" if ts["serve"] is None else "FAIL",
+            f"127.0.0.1:{config.PORT} 로 연결" if ts["serve"] else "설정 확인 불가" if ts["serve"] is None else "설정 없음",
+            "" if ts["serve"] else f"README 6장: tailscale serve --bg {config.PORT}")
+        if ts["funnel"]:
+            add("Funnel(인터넷 공개)", "FAIL", "Funnel 이 켜져 있습니다 (MySSD는 Funnel 요청을 거부하지만 끄는 것이 안전)",
+                "tailscale funnel status 로 확인 후 끄세요.")
+    if ts.get("dns") and ts.get("serve"):
+        ok, why = syscheck.https_probe(f"https://{ts['dns']}/")
+        add("HTTPS", "PASS" if ok else "FAIL", why, "" if ok else "README 6-2 확인 절차를 따라 주세요.")
+    elif STATE["last_https"]:
+        add("HTTPS", "PASS", f"최근 HTTPS 접속 확인: {time.strftime('%Y-%m-%d %H:%M', time.localtime(STATE['last_https']))}")
+    else:
+        add("HTTPS", "확인 필요", "HTTPS 접속을 아직 확인하지 못했습니다",
+            "Tailscale 이 켜진 휴대폰에서 https://<장치 이름>.ts.net 으로 접속해 보세요 (README 6-2).")
+    auto = syscheck.autostart()
+    add("자동 실행", "PASS" if auto else "확인 필요", "시작프로그램에 MySSD 바로가기 있음" if auto else
+        "바로가기 없음" if auto is False else "확인 불가 (Windows 아님)", "" if auto else "autostart_install.bat 실행 (README 7장)")
+    return rows
+
+
+def measure(root):
+    """성능 측정 (읽기만)"""
+    out = []
+    t = time.perf_counter()
+    n = len(list_dir(root, root))
+    out.append(("홈 폴더 목록", (time.perf_counter() - t) * 1000, f"{n}개 항목"))
+    t = time.perf_counter()
+    state = {}
+    hits = sum(1 for name, *_ in scan_ssd(root, state) if "myssd-diagnose" in name)
+    out.append(("전체 검색 1회", (time.perf_counter() - t) * 1000, "일부만 검색 (시간 제한)" if state.get("partial") else "SSD 전체"))
+    t = time.perf_counter()
+    trash_usage(root)
+    out.append(("휴지통 용량 합계", (time.perf_counter() - t) * 1000, f"{len(trash_ids(root))}개 항목"))
+    return out
+
+
+@private.get("/status")
+def status_page(request: Request):
+    info = {"ssd": None}
+    try:
+        root = get_root()
+        HEALTH_CACHE.clear()
+        info.update(ssd=ssd_health(root), disk=disk_info(root), root=str(root))
+    except UserError as e:
+        info["ssd_error"] = e.message
+    ts = syscheck.tailscale(config.PORT)
+    errors = read_jsonl(ERROR_FILE, 20)
+    return page(request, "status.html", info=info, ts=ts, autostart=syscheck.autostart(), last_https=STATE["last_https"],
+                started=STATE["started"], pid=os.getpid(), host=config.HOST, port=config.PORT,
+                windowless=sys.stdout is None or getattr(sys.stdout, "name", "").endswith("console.log"),
+                errors=errors, diagnosis=STATE["diagnosis"], analysis_result=analysis.load(root) if info["ssd"] else None)
+
+
+@private.post("/status/diagnose")
+def diagnose(request: Request, csrf: str = Form("")):
+    check_csrf(request, csrf)
+    try:
+        root = get_root()
+        rows = check_rows(root)
+        perf = measure(root)
+    except UserError as e:
+        rows = [{"name": "SSD 연결", "result": "FAIL", "detail": e.message, "guide": "SSD를 다시 연결한 뒤 진단을 다시 실행하세요."}]
+        perf = []
+    STATE["diagnosis"] = {"time": time.time(), "rows": rows, "perf": perf}
+    audit(request, "diagnose", fails=sum(r["result"] == "FAIL" for r in rows))
+    return RedirectResponse("/status", status_code=303)
+
+
 app.include_router(private)
 
 
@@ -1479,6 +1710,7 @@ class SecureCookieOnHttps:
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http" or scope.get("scheme") != "https":
             return await self.app(scope, receive, send)
+        STATE["last_https"] = time.time()  # 실제로 HTTPS(Tailscale Serve) 요청이 들어온 시각
 
         async def send_secure(message):
             if message["type"] == "http.response.start":

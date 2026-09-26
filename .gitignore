@@ -12,5 +12,7 @@ activity.jsonl
 .myssd_meta/
 .myssd_cache/
 favorites.json
+analysis.json
+errors.jsonl
 .venv/
 venv/

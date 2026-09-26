@@ -52,6 +52,10 @@ MIN_FREE_SPACE_GB = 20
 MASS_OPERATION_THRESHOLD = 100
 MASS_OPERATION_WINDOW_MINUTES = 10
 
+# 큰 파일 찾기에 보여줄 개수 / 폴더 화면에 한 번에 보여줄 항목 수 ([더 보기]로 이어서 표시)
+LARGE_FILES_LIMIT = 50
+FOLDER_PAGE_SIZE = 300
+
 # 사진 썸네일 크기(px)와 썸네일 캐시 최대 크기(SSD_ROOT/.myssd_cache/thumbnails)
 THUMB_SIZE = 256
 THUMB_CACHE_MAX_MB = 500

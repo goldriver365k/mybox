@@ -17,6 +17,8 @@
     <a href="/trash">🗑 휴지통</a>
     <a href="/activity">📝 최근 작업</a>
     <a href="/manage">⚙ SSD 관리</a>
+    <a href="/analysis">📊 저장공간 분석</a>
+    <a href="/status">🩺 시스템 상태</a>
   </div>
   {% if disk %}
   <div class="card disk">
@@ -111,6 +113,10 @@
     <li class="empty">비어 있는 폴더입니다.</li>
     {% endfor %}
   </ul>
+  {% if total > entries|length %}
+  <p class="more">{{ "{:,}".format(total) }}개 중 {{ "{:,}".format(entries|length) }}개 표시 ([전체 선택]은 표시된 항목만 선택)
+    <a class="btn" href="/files?path={{ path|urlencode }}&limit={{ limit + page_size }}">더 보기 (+{{ page_size }})</a></p>
+  {% endif %}
   <form id="bulk" method="post" action="/bulk">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <input type="hidden" name="path" value="{{ path }}">

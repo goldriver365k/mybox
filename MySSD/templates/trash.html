@@ -14,6 +14,7 @@
       </select>
       <noscript><button>정렬</button></noscript>
     </form>
+    <form method="post" action="/trash/recount"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="small" title="기록된 용량이 실제와 다를 때">용량 다시 계산</button></form>
     {% if items %}<a class="small" href="/trash/empty">휴지통 비우기…</a>{% endif %}
   </div>
   <ul class="list">

@@ -133,3 +133,14 @@ input.sel { width: 24px; height: 24px; margin: 18px 0 0; flex: none; }
 @media (min-width: 700px) { .stats { grid-template-columns: repeat(4, 1fr); } }
 .bar.mid span { background: #e6a700; }
 .acts form { display: inline; }
+/* 7단계: 분석·상태 */
+.usage li { padding: 10px 12px; }
+.usage a { display: flex !important; justify-content: space-between; gap: 8px; padding: 0 !important; min-height: 0 !important; }
+.u-name { overflow-wrap: anywhere; }
+.u-size { font-weight: bold; white-space: nowrap; }
+.bar.thin { height: 8px; margin: 4px 0; }
+.st { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 0.85rem; font-weight: bold; }
+.st.ok { background: #dcfce7; color: #15803d; }
+.st.bad { background: #fee2e2; color: #b91c1c; }
+.st.unk { background: #fef3c7; color: #92400e; }
+.more { text-align: center; }

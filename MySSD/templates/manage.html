@@ -25,6 +25,8 @@
   </table>
   <div class="acts big">
     <a href="/trash">휴지통 보기</a>
+    <a href="/analysis">📊 저장공간 분석</a>
+    <a href="/status">🩺 시스템 상태</a>
     <form method="post" action="/manage/cache/clear" onsubmit="return confirm('썸네일 캐시를 정리할까요?\n원본 사진·동영상은 지워지지 않으며, 썸네일은 다시 볼 때 새로 만들어집니다.')">
       <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="confirm" value="yes">
       <button class="restore">썸네일 캐시 정리</button>

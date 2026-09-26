@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}내 SSD - 시스템 상태{% endblock %}
+{% macro mark(v, ok="정상", bad="문제", unknown="확인 필요") %}{% if v is none %}<span class="st unk">{{ unknown }}</span>{% elif v %}<span class="st ok">{{ ok }}</span>{% else %}<span class="st bad">{{ bad }}</span>{% endif %}{% endmacro %}
+{% block main %}
+  <h2>🩺 시스템 상태</h2>
+  <table class="info">
+    <tr><th>SSD 연결</th><td>{% if info.ssd %}<span class="st ok">정상</span> {{ info.root }}{% else %}<span class="st bad">연결 안 됨</span> {{ info.ssd_error }}{% endif %}</td></tr>
+    {% if info.ssd %}
+    <tr><th>SSD 읽기</th><td>{{ mark(info.ssd.readable) }}</td></tr>
+    <tr><th>SSD 쓰기</th><td>{{ mark(info.ssd.writable) }} <span class="meta">(.myssd_temp 에 시험 파일을 만들었다 바로 삭제)</span></td></tr>
+    {% if info.ssd.label %}<tr><th>볼륨 이름</th><td>{{ info.ssd.label }}</td></tr>{% endif %}
+    {% if info.disk %}<tr><th>전체 / 남은 용량</th><td>{{ info.disk.total }} / {{ info.disk.free }}</td></tr>{% endif %}
+    {% endif %}
+    <tr><th>Tailscale</th><td>
+      {% if ts.installed is sameas false %}<span class="st bad">설치 안 됨</span>
+      {% elif ts.installed is none %}<span class="st unk">확인 필요</span> <span class="meta">tailscale 명령을 찾지 못함</span>
+      {% else %}설치됨 · 실행 {{ mark(ts.running, "연결됨", "연결 안 됨") }}{% if ts.ip %} · IP {{ ts.ip }}{% endif %}{% if ts.dns %}<br>MagicDNS: {{ ts.dns }}{% endif %}{% endif %}</td></tr>
+    <tr><th>Serve (HTTPS)</th><td>{{ mark(ts.serve, "설정됨 (127.0.0.1:" ~ port ~ ")", "설정 없음") }}{% if ts.funnel %} <span class="st bad">⚠ Funnel 켜짐</span>{% endif %}</td></tr>
+    <tr><th>HTTPS 접속</th><td>{% if last_https %}<span class="st ok">정상</span> <span class="meta">최근 HTTPS 요청 {{ last_https|date }}</span>
+      {% else %}<span class="st unk">확인 필요</span> <span class="meta">이 서버 실행 후 HTTPS 접속 기록 없음 — [진단 실행] 또는 README 6-2</span>{% endif %}</td></tr>
+    <tr><th>MySSD 서버</th><td><span class="st ok">실행 중</span> <span class="meta">시작 {{ started|date }} · PID {{ pid }} · {{ host }}:{{ port }}{% if windowless %} · 창 없이 실행(자동 실행 방식){% endif %}</span></td></tr>
+    <tr><th>자동 실행</th><td>{{ mark(autostart, "등록됨 (시작프로그램 바로가기)", "등록 안 됨") }}</td></tr>
+    <tr><th>마지막 오류</th><td>{% if errors %}{{ errors[0].time|date }} · {{ errors[0].kind }}{% else %}없음{% endif %}</td></tr>
+  </table>
+
+  <form method="post" action="/status/diagnose" class="box">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button class="btn">🩺 진단 실행</button>
+    <span class="meta">확인만 하며 Windows·방화벽·Tailscale 설정은 바꾸지 않습니다.</span>
+  </form>
+  {% if diagnosis %}
+  <h3>진단 결과 <span class="meta">{{ diagnosis.time|date }}</span></h3>
+  <table class="info">
+    {% for r in diagnosis.rows %}
+    <tr><th>{{ r.name }}</th><td><span class="st {{ {'PASS': 'ok', 'FAIL': 'bad'}.get(r.result, 'unk') }}">{{ r.result }}</span> {{ r.detail }}
+      {% if r.guide and r.result != "PASS" %}<br><span class="meta">→ {{ r.guide }}</span>{% endif %}</td></tr>
+    {% endfor %}
+  </table>
+  {% if diagnosis.perf %}
+  <h3>성능</h3>
+  <table class="info">
+    {% for name, ms, note in diagnosis.perf %}<tr><th>{{ name }}</th><td>{{ "%.0f"|format(ms) }} ms <span class="meta">{{ note }}</span></td></tr>{% endfor %}
+    {% if analysis_result %}<tr><th>SSD 전체 분석</th><td>{{ analysis_result.duration }} 초 <span class="meta">파일 {{ "{:,}".format(analysis_result.files) }}개, {{ analysis_result.time|date }}</span></td></tr>{% endif %}
+  </table>
+  {% endif %}
+  {% endif %}
+
+  <h3>최근 오류</h3>
+  <ul class="list">
+    {% for e in errors %}
+    <li class="row"><div class="body"><span class="name">{{ e.kind }}</span><div class="meta">{{ e.time|date }}{% if e.detail %} · {{ e.detail }}{% endif %}</div></div></li>
+    {% else %}
+    <li class="empty">기록된 오류가 없습니다.</li>
+    {% endfor %}
+  </ul>
+{% endblock %}

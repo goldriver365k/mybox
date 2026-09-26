@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}내 SSD - 저장공간 분석{% endblock %}
+{% block main %}
+{% if mode == "large" %}
+  <h2>큰 파일 (상위 {{ entries|length }}개)</h2>
+  {% if result %}<p class="note">마지막 분석 {{ result.time|date }} 기준. 파일을 누르면 위치·정보로 이동합니다 (여기서 바로 삭제되지 않습니다).</p>{% endif %}
+  <ul class="list">
+    {% for e in entries %}
+    <li class="row">
+      <span class="thumb">{{ m.icon(e) }}</span>
+      <div class="body">
+        <span class="name">{{ loop.index }}. {{ e.name }}</span>
+        <div class="meta"><b>{{ e.size|size }}</b> · <a href="/files?path={{ e.parent|urlencode }}">{{ m.location(e) }}</a> · 수정 {{ e.mtime|date }}
+          {% if e.missing %}<br>⚠ 분석 이후 이동되었거나 삭제됨 — [다시 분석]으로 갱신하세요{% endif %}</div>
+        {% if not e.missing %}<div class="acts">
+          <a href="/files?path={{ e.parent|urlencode }}">위치 열기</a>
+          <a href="/info?path={{ e.path|urlencode }}">정보</a>
+        </div>{% endif %}
+      </div>
+    </li>
+    {% else %}
+    <li class="empty">분석 결과가 없습니다. <a href="/analysis">저장공간 분석</a>에서 [다시 분석]을 누르세요.</li>
+    {% endfor %}
+  </ul>
+  <p><a class="btn gray" href="/analysis">← 저장공간 분석</a></p>
+{% else %}
+  <h2>📊 저장공간 분석</h2>
+  {% if disk %}
+  <div class="card">
+    <div class="stats">
+      <div><span>전체 용량</span><b>{{ disk.total }}</b></div>
+      <div><span>사용 중</span><b>{{ disk.used }}</b></div>
+      <div><span>남은 공간</span><b>{{ disk.free }}</b></div>
+      <div><span>사용률</span><b>{{ disk.pct }}%</b></div>
+    </div>
+    <div class="bar{% if disk.level == 'critical' %} low{% elif disk.level == 'low' %} mid{% endif %}"><span style="width: {{ disk.pct }}%"></span></div>
+    {% if disk.warning %}<p class="warn">⚠ {{ disk.warning }}</p>{% endif %}
+  </div>
+  {% endif %}
+
+  <div id="progress" class="progress"{% if not astatus.running %} hidden{% endif %}>
+    <div class="p-name">SSD 분석 중...</div>
+    <div>확인한 파일 <b id="a-files">{{ "{:,}".format(astatus.files or 0) }}</b>개</div>
+    <div class="meta">현재 분석: <span id="a-current">{{ astatus.current or "" }}</span></div>
+    {% if result %}<div class="meta">(지난 분석 때 파일 {{ "{:,}".format(result.files) }}개)</div>{% endif %}
+  </div>
+  {% if astatus.error %}<p class="error">분석이 완료되지 않았습니다: {{ astatus.error }}</p>{% endif %}
+  <div class="card" id="analysis-bar"{% if astatus.running %} hidden{% endif %}>
+    {% if result %}마지막 분석: <b>{{ result.time|date }}</b> · 파일 {{ "{:,}".format(result.files) }}개 · {{ result.duration }}초 걸림
+    {% if result.unreadable %}<br>⚠ 읽을 수 없는 폴더 {{ result.unreadable }}개는 제외됨{% endif %}
+    {% elif corrupt %}⚠ 저장된 분석 결과가 손상되었습니다. 다시 분석하면 새로 만들어집니다 (사용자 파일과는 무관).
+    {% else %}아직 분석한 적이 없습니다. SSD 전체를 한 번 훑으므로 파일이 많으면 몇 분 걸릴 수 있습니다.{% endif %}
+    <div class="acts">
+      <form method="post" action="/analysis/start"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="restore">🔄 다시 분석</button></form>
+      {% if result %}<a href="/analysis/large">큰 파일 보기</a>{% endif %}
+      {% if result or corrupt %}<form method="post" action="/analysis/clear" onsubmit="return confirm('저장된 분석 결과만 지웁니다. 사용자 파일은 지워지지 않습니다.')"><input type="hidden" name="csrf" value="{{ csrf }}"><button>분석 결과 지우기</button></form>{% endif %}
+    </div>
+  </div>
+
+  {% if result %}
+  <h3>폴더별 사용량 (사용자 파일)</h3>
+  <ul class="list usage">
+    {% for name, size, files in result.folders %}
+    <li><a href="/files?path={{ name|urlencode }}"><span class="u-name">📁 {{ name }}</span><span class="u-size">{{ size|size }}</span></a>
+      <div class="bar thin"><span style="width: {{ (size * 100 / biggest)|round(1) if biggest else 0 }}%"></span></div>
+      <div class="meta">파일 {{ "{:,}".format(files) }}개</div></li>
+    {% endfor %}
+    {% if result.top_files[1] %}<li><span class="u-name">📄 (최상위 폴더의 파일)</span><span class="u-size">{{ result.top_files[0]|size }}</span>
+      <div class="meta">파일 {{ "{:,}".format(result.top_files[1]) }}개</div></li>{% endif %}
+  </ul>
+  <h3>파일 종류별 용량</h3>
+  <table class="info">
+    {% for name, size, files in result.types %}<tr><th>{{ {"사진": "🖼", "동영상": "🎬", "문서": "📄", "압축파일": "🗜"}.get(name, "📦") }} {{ name }}</th><td>{{ size|size }} · 파일 {{ "{:,}".format(files) }}개</td></tr>{% endfor %}
+  </table>
+  <p class="note">확장자로만 분류합니다 (사진 jpg·png·heic…, 동영상 mp4·mov·mkv…, 문서 pdf·xlsx·hwp…, 압축 zip·7z…).</p>
+  {% endif %}
+  <h3>MySSD 관리 폴더 (사용자 파일과 별도)</h3>
+  <table class="info">
+    <tr><th>휴지통</th><td>{{ trash[0]|size }} · 파일 {{ "{:,}".format(trash[1]) }}개 <a href="/trash">보기</a></td></tr>
+    {% if result %}{% for name, v in result.managed.items() %}{% if name != "휴지통" %}<tr><th>{{ name }}</th><td>{{ v[0]|size }} · 파일 {{ "{:,}".format(v[1]) }}개 <span class="meta">(분석 시점)</span></td></tr>{% endif %}{% endfor %}{% endif %}
+  </table>
+{% endif %}
+{% endblock %}
+{% block script %}
+{% if mode != "large" %}
+<script>
+(function () {
+  var running = {{ "true" if astatus.running else "false" }};
+  function poll() {
+    fetch("/analysis/status", { credentials: "same-origin" }).then(function (r) { return r.json(); }).then(function (s) {
+      if (!s.running) { if (running) location.reload(); return; }
+      running = true;
+      document.getElementById("progress").hidden = false;
+      document.getElementById("analysis-bar").hidden = true;
+      document.getElementById("a-files").textContent = (s.files || 0).toLocaleString();
+      document.getElementById("a-current").textContent = s.current || "";
+      setTimeout(poll, 1000);
+    }).catch(function () { setTimeout(poll, 3000); });
+  }
+  if (running) poll();
+  var f = document.querySelector('form[action="/analysis/start"]');
+  if (f) f.addEventListener("submit", function () { setTimeout(poll, 500); });
+})();
+</script>
+{% endif %}
+{% endblock %}
